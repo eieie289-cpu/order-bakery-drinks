@@ -1748,8 +1748,10 @@ function App() {
       {/* Role switcher — only rendered once a staff PIN has been entered.
           A plain customer opening the site never sees this at all.
           เฉพาะแถบแท็บ (มุมมองลูกค้า/ออร์เดอร์ร้าน/จัดการเมนู) เท่านั้นที่ sticky ติดบนจอตอนเลื่อน
-          ส่วนปุ่มตั้งค่าซิงค์กับปุ่มออกจากโหมดพนักงาน เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ */}
-      {staffUnlocked && (
+          ส่วนปุ่มตั้งค่าซิงค์กับปุ่มออกจากโหมดพนักงาน เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ
+          ซ่อนแถบทั้งหมดตอนพนักงานกด "มุมมองลูกค้า" แล้วเดินเข้าสู่ขั้นตอนชำระเงิน/สั่งสำเร็จ —
+          ให้หน้าจอตอนนั้นเหมือนเป็นลูกค้าจริง ๆ ไม่มีแถบพนักงานค้างอยู่ด้านบนให้สับสน */}
+      {staffUnlocked && !(role === "customer" && customerStage !== "menu") && (
         <>
           <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
             <div
@@ -1809,6 +1811,18 @@ function App() {
 
       <FirebaseSetupModal open={showFirebaseSetup} onClose={() => setShowFirebaseSetup(false)} />
 
+      {/* ปุ่มลอยกลับสู่มุมมองพนักงาน — โผล่เฉพาะตอนพนักงานกำลังพรีวิวหน้าลูกค้าแล้วเดินเข้าสู่ขั้นตอนชำระเงิน/สั่งสำเร็จ
+          (ตอนนั้นแถบแท็บด้านบนถูกซ่อนไปแล้ว เพื่อให้เหมือนหน้าจอลูกค้าจริง) */}
+      {staffUnlocked && role === "customer" && customerStage !== "menu" && (
+        <button
+          onClick={() => { setCustomerStage("menu"); setCart([]); setRole("staff-orders"); }}
+          style={{ background: COLORS.ink, color: "#FFF9F0" }}
+          className="fixed top-3 left-1/2 -translate-x-1/2 z-40 text-[11px] font-semibold px-3.5 py-2 rounded-full shadow-md flex items-center gap-1"
+        >
+          <ArrowLeft size={12} /> กลับสู่มุมมองพนักงาน
+        </button>
+      )}
+
       <div className="w-full max-w-md flex-1">
         {role === "customer" && customerStage === "menu" && (
           <CustomerView
@@ -1844,18 +1858,6 @@ function App() {
         )}
         {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={setMenu} />}
       </div>
-
-      {/* TEST ONLY — ทางลัดเข้าหน้าพนักงานตอนทดสอบใน Claude preview (ไม่มี address bar ให้พิมพ์ ?staff=1)
-          ลบ block นี้ทิ้งก่อน deploy จริง — ตอน deploy จริงพนักงานเข้าผ่านลิงก์ ?staff=1 แทน */}
-      {!isStaffLink && (
-        <button
-          onClick={() => setIsStaffLink(true)}
-          style={{ color: COLORS.inkSoft, opacity: 0.35 }}
-          className="text-[10px] py-3"
-        >
-          (ทดสอบ) เข้าหน้าพนักงาน
-        </button>
-      )}
     </div>
   );
 }
