@@ -189,6 +189,47 @@ function ImageLightbox({ src, onClose }) {
   );
 }
 
+// ย่อ/บีบอัดรูป (เช่น รูปสลิปจากกล้องมือถือที่ไฟล์ใหญ่ 3-5MB+) ก่อนอัปโหลด
+// โดยลดความกว้าง/สูงสูงสุดและแปลงเป็น JPEG คุณภาพ ~0.8 — ลดขนาดไฟล์ลงมาก
+// (มักเหลือแค่หลักร้อย KB) ทำให้อัปโหลดขึ้น Firebase Storage เร็วขึ้นมาก
+// โดยที่ยังคมชัดพอสำหรับอ่านสลิปโอนเงินตามปกติ
+// คืนค่าเป็น { dataUrl, blob }
+function compressImage(file, maxDimension = 1280, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width >= height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      canvas.toBlob(
+        (blob) => resolve({ dataUrl, blob: blob || file }),
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("อ่านรูปไม่สำเร็จ"));
+    };
+    img.src = objectUrl;
+  });
+}
+
 function PrimaryButton({ children, onClick, disabled, full, style }) {
   return (
     <button
@@ -599,36 +640,50 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
   const isCash = method === "cash";
 
   // แค่เก็บรูปสลิปไว้ให้พนักงานเปิดดูเอง — ไม่มีการอ่าน/ตรวจสอบอัตโนมัติใด ๆ
-  const handleSlipUpload = (e) => {
+  const handleSlipUpload = async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const dataUrl = reader.result;
-      setSlipImg({ dataUrl, url: null });
-      setUploading(true);
 
-      if (FIREBASE_SYNC_ENABLED) {
-        // อัปโหลดรูปขึ้น Firebase Storage เพื่อเอา URL ไปเก็บใน Firestore แทนการฝัง
-        // base64 ตรง ๆ (เอกสารจะเล็ก โหลดเร็ว และพนักงานเปิดดูรูปจากเครื่องไหนก็ได้)
-        try {
-          const path = `slips/${Date.now()}-${file.name || "slip.jpg"}`;
-          const fileRef = storage.ref(path);
-          await fileRef.put(file);
-          const url = await fileRef.getDownloadURL();
-          setSlipImg((prev) => (prev ? { ...prev, url } : prev));
-        } catch (uploadErr) {
-          // อัปโหลดรูปไม่สำเร็จ (เช่น ยังไม่ได้ตั้งค่า Firebase Storage) — ลูกค้ายังกดยืนยันต่อได้
-          // แค่พนักงานจะไม่มีรูปสลิปให้เปิดดูย้อนหลังจากอุปกรณ์เครื่องอื่น
-          console.error("Slip upload failed:", uploadErr);
-        }
-      } else {
-        // โหมดออฟไลน์ (ยังไม่เปิด Firebase) — ใช้ dataUrl ในเครื่องแทน URL ออนไลน์ไปก่อน
-        setSlipImg((prev) => (prev ? { ...prev, url: prev.dataUrl } : prev));
+    let dataUrl, blob;
+    try {
+      // ย่อ/บีบอัดรูปก่อนเสมอ (รูปจากกล้องมือถือมักใหญ่หลาย MB) — ทั้งเพื่อให้
+      // preview โหลดไวขึ้น และไฟล์ที่อัปขึ้น Firebase Storage เล็กลงมาก อัปเร็วขึ้น
+      const compressed = await compressImage(file);
+      dataUrl = compressed.dataUrl;
+      blob = compressed.blob;
+    } catch (compressErr) {
+      // เผื่อบีบอัดไม่สำเร็จ (บราวเซอร์แปลก ๆ) — fallback ไปใช้ไฟล์ต้นฉบับแทน
+      console.error("Compress slip failed, using original file:", compressErr);
+      blob = file;
+      dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    setSlipImg({ dataUrl, url: null });
+    setUploading(true);
+
+    if (FIREBASE_SYNC_ENABLED) {
+      // อัปโหลดรูป (ที่บีบอัดแล้ว) ขึ้น Firebase Storage เพื่อเอา URL ไปเก็บใน Firestore
+      // แทนการฝัง base64 ตรง ๆ (เอกสารจะเล็ก โหลดเร็ว และพนักงานเปิดดูรูปจากเครื่องไหนก็ได้)
+      try {
+        const path = `slips/${Date.now()}-slip.jpg`;
+        const fileRef = storage.ref(path);
+        await fileRef.put(blob, { contentType: "image/jpeg" });
+        const url = await fileRef.getDownloadURL();
+        setSlipImg((prev) => (prev ? { ...prev, url } : prev));
+      } catch (uploadErr) {
+        // อัปโหลดรูปไม่สำเร็จ (เช่น ยังไม่ได้ตั้งค่า Firebase Storage) — ลูกค้ายังกดยืนยันต่อได้
+        // แค่พนักงานจะไม่มีรูปสลิปให้เปิดดูย้อนหลังจากอุปกรณ์เครื่องอื่น
+        console.error("Slip upload failed:", uploadErr);
       }
-      setUploading(false);
-    };
-    reader.readAsDataURL(file);
+    } else {
+      // โหมดออฟไลน์ (ยังไม่เปิด Firebase) — ใช้ dataUrl ในเครื่องแทน URL ออนไลน์ไปก่อน
+      setSlipImg((prev) => (prev ? { ...prev, url: prev.dataUrl } : prev));
+    }
+    setUploading(false);
   };
 
   const removeSlip = () => {
@@ -841,9 +896,11 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
 
       <ImageLightbox src={zoomedSlip} onClose={() => setZoomedSlip(null)} />
 
-      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && !slipImg)}>
+      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && (!slipImg || uploading))}>
         {paying
           ? "กำลังดำเนินการ..."
+          : !isCash && uploading
+          ? "กำลังอัปโหลดรูปสลิป..."
           : isCash
           ? "ยืนยันสั่งอาหาร"
           : `ยืนยันการโอน ฿${total}`}
@@ -1176,10 +1233,12 @@ function MenuManagerView({ menu, setMenu }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, onAdvance, onDelete, onDeleteDone }) {
+function StaffOrdersView({ orders, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [confirmDeleteDone, setConfirmDeleteDone] = useState(false); // รอ confirm ลบที่เสร็จแล้วทั้งหมด
+  const [confirmCancelId, setConfirmCancelId] = useState(null); // order id รอ confirm ยกเลิก
+  const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกทั้งหมด
 
   const advance = (id) => {
     onAdvance(id);
@@ -1189,10 +1248,12 @@ function StaffOrdersView({ orders, onAdvance, onDelete, onDeleteDone }) {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: "เริ่มทำ" },
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: "เสร็จแล้ว" },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
+    cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
   };
 
   const sorted = [...orders].sort((a, b) => b.createdAt - a.createdAt);
   const doneCount = orders.filter((o) => o.status === "done").length;
+  const cancelledCount = orders.filter((o) => o.status === "cancelled").length;
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
@@ -1200,15 +1261,26 @@ function StaffOrdersView({ orders, onAdvance, onDelete, onDeleteDone }) {
         <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold">
           ออร์เดอร์เข้าร้าน
         </h1>
-        {doneCount > 0 && (
-          <button
-            onClick={() => setConfirmDeleteDone(true)}
-            style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
-            className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
-          >
-            <Trash2 size={12} /> ลบที่เสร็จแล้ว ({doneCount})
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {cancelledCount > 0 && (
+            <button
+              onClick={() => setConfirmDeleteCancelled(true)}
+              style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
+              className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
+            >
+              <Trash2 size={12} /> ลบที่ยกเลิก ({cancelledCount})
+            </button>
+          )}
+          {doneCount > 0 && (
+            <button
+              onClick={() => setConfirmDeleteDone(true)}
+              style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
+              className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
+            >
+              <Trash2 size={12} /> ลบที่เสร็จแล้ว ({doneCount})
+            </button>
+          )}
+        </div>
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-5">อัปเดตแบบเรียลไทม์เมื่อลูกค้าสั่ง</p>
 
@@ -1256,8 +1328,19 @@ function StaffOrdersView({ orders, onAdvance, onDelete, onDeleteDone }) {
                   >
                     {order.status === "preparing" && <Clock size={11} />}
                     {order.status === "done" && <Check size={11} />}
+                    {order.status === "cancelled" && <X size={11} />}
                     {meta.label}
                   </span>
+                  {(order.status === "new" || order.status === "preparing") && (
+                    <button
+                      onClick={() => setConfirmCancelId(order.id)}
+                      style={{ color: "#C0533F" }}
+                      className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                      aria-label="ยกเลิกออร์เดอร์นี้"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                   <button
                     onClick={() => setConfirmDeleteId(order.id)}
                     style={{ color: COLORS.inkSoft }}
@@ -1389,6 +1472,251 @@ function StaffOrdersView({ orders, onAdvance, onDelete, onDeleteDone }) {
                 ลบทั้งหมด
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันก่อนยกเลิกออร์เดอร์รายตัว — เช่นลูกค้าโทรมายกเลิกที่ร้าน */}
+      {confirmCancelId && (
+        <div
+          onClick={() => setConfirmCancelId(null)}
+          style={{ background: "rgba(20,14,8,0.55)" }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#FFFFFF" }}
+            className="w-full max-w-sm rounded-2xl p-5"
+          >
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">ยกเลิกออร์เดอร์นี้เลยไหม?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              ใช้เมื่อลูกค้าติดต่อมายกเลิก — ออร์เดอร์จะถูกทำเครื่องหมาย "ยกเลิกแล้ว" และไม่นับรวมในยอดขาย
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmCancelId(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ไม่ยกเลิก
+              </button>
+              <button
+                onClick={() => { onCancel(confirmCancelId); setConfirmCancelId(null); }}
+                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยืนยันยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันก่อนลบที่ยกเลิกแล้วทั้งหมด */}
+      {confirmDeleteCancelled && (
+        <div
+          onClick={() => setConfirmDeleteCancelled(false)}
+          style={{ background: "rgba(20,14,8,0.55)" }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#FFFFFF" }}
+            className="w-full max-w-sm rounded-2xl p-5"
+          >
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">
+              ลบออร์เดอร์ที่ยกเลิกทั้งหมด {cancelledCount} รายการเลยไหม?
+            </p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">ลบแล้วกู้คืนไม่ได้ (ไม่กระทบออร์เดอร์อื่น)</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDeleteCancelled(false)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => { onDeleteCancelled(); setConfirmDeleteCancelled(false); }}
+                style={{ background: "#C0533F", color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ลบทั้งหมด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================= STAFF DASHBOARD (สรุปยอดขาย) =================
+// สรุปยอดขายให้พนักงาน/เจ้าของร้านดูภาพรวม: ยอดขายรวม, ขายเมนูไหนดี,
+// และตัวเลือกเสริม (เช่น แยกน้ำแข็ง/เพิ่มท็อปปิ้ง) ถูกเลือกกี่ครั้ง
+// นับจาก "ออร์เดอร์ที่เข้ามา" ทั้งหมดในช่วงเวลาที่เลือก (ทุกสถานะ ไม่ว่าจะใหม่/กำลังทำ/เสร็จแล้ว)
+function StaffDashboardView({ orders }) {
+  const [range, setRange] = useState("today"); // today | 7d | 30d | all
+  const [expandedKey, setExpandedKey] = useState(null);
+
+  const rangeStart = useMemo(() => {
+    const now = new Date();
+    if (range === "all") return null;
+    if (range === "today") {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return d.getTime();
+    }
+    const days = range === "7d" ? 7 : 30;
+    return now.getTime() - days * 24 * 60 * 60 * 1000;
+  }, [range]);
+
+  const filteredOrders = useMemo(() => {
+    if (rangeStart === null) return orders;
+    return orders.filter((o) => o.createdAt >= rangeStart);
+  }, [orders, rangeStart]);
+
+  // ยอดขายนับเฉพาะออร์เดอร์ที่ไม่ถูกยกเลิก — ออร์เดอร์ที่ลูกค้ายกเลิกไม่ถือเป็นยอดขายจริง
+  const soldOrders = useMemo(
+    () => filteredOrders.filter((o) => o.status !== "cancelled"),
+    [filteredOrders]
+  );
+  const cancelledInRange = filteredOrders.length - soldOrders.length;
+
+  // รวมยอดต่อเมนู: จำนวนที่ขาย, ยอดขายรวม (รวมตัวเลือกเสริมแล้ว), และรายละเอียด
+  // ตัวเลือกเสริมที่ลูกค้าเลือก (เช่น แยกน้ำแข็ง กี่ครั้ง, เพิ่มไข่มุก กี่ครั้ง)
+  const menuStats = useMemo(() => {
+    const map = new Map(); // key: menuId||name -> { name, qty, revenue, addOnCounts: Map(name -> qty) }
+    for (const order of soldOrders) {
+      for (const item of order.items || []) {
+        const key = item.menuId || item.name;
+        if (!map.has(key)) {
+          map.set(key, { key, name: item.name, qty: 0, revenue: 0, addOnCounts: new Map() });
+        }
+        const entry = map.get(key);
+        entry.qty += item.qty;
+        entry.revenue += item.price * item.qty;
+        for (const addOn of item.addOns || []) {
+          entry.addOnCounts.set(addOn.name, (entry.addOnCounts.get(addOn.name) || 0) + item.qty);
+        }
+      }
+    }
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+  }, [soldOrders]);
+
+  const totalRevenue = soldOrders.reduce(
+    (sum, o) => sum + (o.items || []).reduce((s, i) => s + i.price * i.qty, 0),
+    0
+  );
+  const totalOrders = soldOrders.length;
+  const totalItemsSold = menuStats.reduce((s, m) => s + m.qty, 0);
+  const maxRevenue = menuStats.length ? menuStats[0].revenue : 0;
+
+  const rangeLabels = {
+    today: "วันนี้",
+    "7d": "7 วันล่าสุด",
+    "30d": "30 วันล่าสุด",
+    all: "ทั้งหมด",
+  };
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+        สรุปยอดขาย
+      </h1>
+      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+        นับจากออร์เดอร์ในช่วงที่เลือก (ไม่รวมออร์เดอร์ที่ยกเลิก)
+        {cancelledInRange > 0 && ` · ยกเลิกไปแล้ว ${cancelledInRange} ออร์เดอร์`}
+      </p>
+
+      {/* ตัวเลือกช่วงเวลา */}
+      <div className="flex gap-1.5 mb-4">
+        {["today", "7d", "30d", "all"].map((r) => (
+          <button
+            key={r}
+            onClick={() => setRange(r)}
+            style={{
+              background: range === r ? COLORS.caramel : "#FFFFFF",
+              color: range === r ? "#FFF9F0" : COLORS.inkSoft,
+              border: `1px solid ${range === r ? COLORS.caramel : COLORS.line}`,
+            }}
+            className="flex-1 text-xs font-semibold py-2 rounded-full"
+          >
+            {rangeLabels[r]}
+          </button>
+        ))}
+      </div>
+
+      {/* การ์ดสรุปตัวเลข */}
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ยอดขาย</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalOrders}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ออร์เดอร์</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalItemsSold}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ชิ้นที่ขาย</p>
+        </div>
+      </div>
+
+      {menuStats.length === 0 && (
+        <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
+          <ChefHat size={32} className="mx-auto mb-2 opacity-50" />
+          ยังไม่มีออร์เดอร์ในช่วงนี้
+        </div>
+      )}
+
+      {menuStats.length > 0 && (
+        <div>
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">ยอดขายตามเมนู</p>
+          <div className="space-y-2">
+            {menuStats.map((m) => {
+              const isOpen = expandedKey === m.key;
+              const addOnList = [...m.addOnCounts.entries()].sort((a, b) => b[1] - a[1]);
+              const barPct = maxRevenue ? Math.max(4, Math.round((m.revenue / maxRevenue) * 100)) : 0;
+              return (
+                <div
+                  key={m.key}
+                  style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+                  className="rounded-2xl p-3.5"
+                >
+                  <button
+                    onClick={() => setExpandedKey(isOpen ? null : m.key)}
+                    className="w-full text-left"
+                    disabled={addOnList.length === 0}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span style={{ color: COLORS.ink }} className="text-sm font-semibold">{m.name}</span>
+                      <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold flex-shrink-0">฿{m.revenue.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div style={{ background: COLORS.paper, height: 6 }} className="flex-1 rounded-full overflow-hidden">
+                        <div style={{ background: COLORS.peach, width: `${barPct}%`, height: "100%" }} />
+                      </div>
+                      <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex-shrink-0">{m.qty} ชิ้น</span>
+                    </div>
+                    {addOnList.length > 0 && (
+                      <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
+                        {isOpen ? "ซ่อนรายละเอียดตัวเลือกเสริม ▲" : "ดูรายละเอียดตัวเลือกเสริม ▼"}
+                      </p>
+                    )}
+                  </button>
+                  {isOpen && addOnList.length > 0 && (
+                    <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="mt-2.5 pt-2.5 space-y-1.5">
+                      {addOnList.map(([name, count]) => (
+                        <div key={name} className="flex items-center justify-between text-xs">
+                          <span style={{ color: COLORS.inkSoft }}>{name}</span>
+                          <span style={{ color: COLORS.ink }} className="font-semibold">{count} ครั้ง</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1570,6 +1898,20 @@ function App() {
     }
   };
 
+  // ยกเลิกออร์เดอร์ — เช่นลูกค้าโทรมายกเลิกที่ร้าน แยกจากการลบถาวร
+  // ออร์เดอร์ที่ยกเลิกยังอยู่ในระบบให้ดูย้อนหลังได้ แต่จะไม่ถูกนับรวมในแดชบอร์ดยอดขาย
+  const cancelOrder = async (id) => {
+    if (FIREBASE_SYNC_ENABLED) {
+      try {
+        await db.collection("orders").doc(id).update({ status: "cancelled" });
+      } catch (err) {
+        console.error("Failed to cancel order:", err);
+      }
+    } else {
+      setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: "cancelled" } : o)));
+    }
+  };
+
   // ลบออร์เดอร์รายตัว — พนักงานกดลบเองจากการ์ดออร์เดอร์ (มี confirm กันกดพลาด)
   const deleteOrder = async (id) => {
     if (FIREBASE_SYNC_ENABLED) {
@@ -1597,6 +1939,23 @@ function App() {
       }
     } else {
       setOrders((prev) => prev.filter((o) => o.status !== "done"));
+    }
+  };
+
+  // ลบออร์เดอร์ที่สถานะ "ยกเลิกแล้ว" ทั้งหมดในครั้งเดียว
+  const deleteCancelledOrders = async () => {
+    const cancelledIds = orders.filter((o) => o.status === "cancelled").map((o) => o.id);
+    if (cancelledIds.length === 0) return;
+    if (FIREBASE_SYNC_ENABLED) {
+      try {
+        const batch = db.batch();
+        cancelledIds.forEach((id) => batch.delete(db.collection("orders").doc(id)));
+        await batch.commit();
+      } catch (err) {
+        console.error("Failed to bulk-delete cancelled orders:", err);
+      }
+    } else {
+      setOrders((prev) => prev.filter((o) => o.status !== "cancelled"));
     }
   };
 
@@ -1657,6 +2016,7 @@ function App() {
               {[
                 { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
                 { id: "staff-menu", label: "จัดการเมนู" },
+                { id: "staff-dashboard", label: "ยอดขาย" },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -1705,11 +2065,14 @@ function App() {
           <StaffOrdersView
             orders={orders}
             onAdvance={advanceOrder}
+            onCancel={cancelOrder}
             onDelete={deleteOrder}
             onDeleteDone={deleteDoneOrders}
+            onDeleteCancelled={deleteCancelledOrders}
           />
         )}
         {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} />}
+        {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
       </div>
     </div>
   );
