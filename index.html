@@ -448,7 +448,7 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
             </div>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">เลือกตัวเลือกเพิ่มเติมได้ (ถ้าต้องการ)</p>
             <div className="space-y-2 mb-5">
-              {(addOnSheetFor.addOns || []).map((a) => {
+              {[...(addOnSheetFor.addOns || [])].sort((a, b) => a.price - b.price).map((a) => {
                 const checked = selectedAddOnIds.includes(a.id);
                 return (
                   <button
@@ -905,7 +905,9 @@ function MenuManagerView({ menu, setMenu }) {
 
   const startEdit = (item) => {
     setEditing(item.id);
-    setForm({ name: item.name, desc: item.desc, price: String(item.price), category: item.category, img: item.img || "", addOns: item.addOns || [] });
+    // เรียงตัวเลือกเดิมตามราคาน้อยไปมากตอนเปิดแก้ไข เผื่อเป็นรายการเก่าที่ยังไม่ได้เรียง
+    const sortedAddOns = [...(item.addOns || [])].sort((a, b) => a.price - b.price);
+    setForm({ name: item.name, desc: item.desc, price: String(item.price), category: item.category, img: item.img || "", addOns: sortedAddOns });
     setNewAddOnName("");
     setNewAddOnPrice("");
   };
@@ -929,7 +931,8 @@ function MenuManagerView({ menu, setMenu }) {
     const name = newAddOnName.trim();
     const price = Number(newAddOnPrice);
     if (!name || !newAddOnPrice || Number.isNaN(price)) return;
-    setForm((f) => ({ ...f, addOns: [...f.addOns, { id: nextAddOnId(), name, price }] }));
+    // เรียงตัวเลือกใหม่ตามราคาน้อยไปมากทุกครั้งที่เพิ่ม — ตัวที่ +0 บาทจะขึ้นบนสุดเสมอ
+    setForm((f) => ({ ...f, addOns: [...f.addOns, { id: nextAddOnId(), name, price }].sort((a, b) => a.price - b.price) }));
     setNewAddOnName("");
     setNewAddOnPrice("");
   };
@@ -1743,58 +1746,65 @@ function App() {
       `}</style>
 
       {/* Role switcher — only rendered once a staff PIN has been entered.
-          A plain customer opening the site never sees this at all. */}
+          A plain customer opening the site never sees this at all.
+          เฉพาะแถบแท็บ (มุมมองลูกค้า/ออร์เดอร์ร้าน/จัดการเมนู) เท่านั้นที่ sticky ติดบนจอตอนเลื่อน
+          ส่วนปุ่มตั้งค่าซิงค์กับปุ่มออกจากโหมดพนักงาน เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ */}
       {staffUnlocked && (
-        <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
-          <div
-            style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-            className="rounded-2xl p-1 flex gap-1 shadow-sm"
-          >
-            {[
-              { id: "customer", label: "มุมมองลูกค้า" },
-              { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
-              { id: "staff-menu", label: "จัดการเมนู" },
-            ].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setRole(t.id)}
-                style={{
-                  background: role === t.id ? COLORS.ink : "transparent",
-                  color: role === t.id ? "#FFF9F0" : COLORS.inkSoft,
-                }}
-                className="flex-1 text-xs font-semibold py-2 rounded-xl transition-colors"
-              >
-                {t.label}
-              </button>
-            ))}
+        <>
+          <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
+            <div
+              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+              className="rounded-2xl p-1 flex gap-1 shadow-sm"
+            >
+              {[
+                { id: "customer", label: "มุมมองลูกค้า" },
+                { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
+                { id: "staff-menu", label: "จัดการเมนู" },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setRole(t.id)}
+                  style={{
+                    background: role === t.id ? COLORS.ink : "transparent",
+                    color: role === t.id ? "#FFF9F0" : COLORS.inkSoft,
+                  }}
+                  className="flex-1 text-xs font-semibold py-2 rounded-xl transition-colors"
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
-          {/* ปุ่มตั้งค่าระบบซิงค์ Firebase — ให้พนักงานวาง config เองจากในแอป ไม่ต้องแก้โค้ด */}
-          <button
-            onClick={() => setShowFirebaseSetup(true)}
-            style={{
-              background: FIREBASE_SYNC_ENABLED ? COLORS.sageSoft : "#FFFFFF",
-              color: FIREBASE_SYNC_ENABLED ? COLORS.sage : COLORS.inkSoft,
-              border: `1px solid ${FIREBASE_SYNC_ENABLED ? COLORS.sage : COLORS.line}`,
-            }}
-            className="w-full mt-1.5 text-[11px] font-semibold py-2 rounded-xl flex items-center justify-center gap-1.5"
-          >
-            {FIREBASE_SYNC_ENABLED ? "🟢 ซิงค์ออนไลน์อยู่ — แตะเพื่อจัดการ" : "🔗 ตั้งค่าระบบซิงค์ (ยังออฟไลน์)"}
-          </button>
-          {/* ออกจากโหมดพนักงานทั้งหมด — กลับไปเป็นหน้าจอลูกค้าล้วน ๆ ไม่มีแถบสลับด้านบนนี้อีก
-              ต้องกรอก PIN ใหม่ (หรือเข้าลิงก์ ?staff=1 ใหม่) ถึงจะเห็นแถบนี้อีกครั้ง */}
-          <button
-            onClick={() => {
-              setStaffUnlocked(false);
-              setIsStaffLink(false);
-              setPinInput("");
-              setRole("customer");
-            }}
-            style={{ color: COLORS.inkSoft }}
-            className="w-full text-[11px] text-center py-2 opacity-60"
-          >
-            ออกจากโหมดพนักงาน — กลับหน้าลูกค้าล้วน ๆ
-          </button>
-        </div>
+
+          <div className="w-full max-w-md px-3 pt-1.5">
+            {/* ปุ่มตั้งค่าระบบซิงค์ Firebase — ให้พนักงานวาง config เองจากในแอป ไม่ต้องแก้โค้ด */}
+            <button
+              onClick={() => setShowFirebaseSetup(true)}
+              style={{
+                background: FIREBASE_SYNC_ENABLED ? COLORS.sageSoft : "#FFFFFF",
+                color: FIREBASE_SYNC_ENABLED ? COLORS.sage : COLORS.inkSoft,
+                border: `1px solid ${FIREBASE_SYNC_ENABLED ? COLORS.sage : COLORS.line}`,
+              }}
+              className="w-full text-[11px] font-semibold py-2 rounded-xl flex items-center justify-center gap-1.5"
+            >
+              {FIREBASE_SYNC_ENABLED ? "🟢 ซิงค์ออนไลน์อยู่ — แตะเพื่อจัดการ" : "🔗 ตั้งค่าระบบซิงค์ (ยังออฟไลน์)"}
+            </button>
+            {/* ออกจากโหมดพนักงานทั้งหมด — กลับไปเป็นหน้าจอลูกค้าล้วน ๆ ไม่มีแถบสลับด้านบนนี้อีก
+                ต้องกรอก PIN ใหม่ (หรือเข้าลิงก์ ?staff=1 ใหม่) ถึงจะเห็นแถบนี้อีกครั้ง */}
+            <button
+              onClick={() => {
+                setStaffUnlocked(false);
+                setIsStaffLink(false);
+                setPinInput("");
+                setRole("customer");
+              }}
+              style={{ color: COLORS.inkSoft }}
+              className="w-full text-[11px] text-center py-2 opacity-60"
+            >
+              ออกจากโหมดพนักงาน — กลับหน้าลูกค้าล้วน ๆ
+            </button>
+          </div>
+        </>
       )}
 
       <FirebaseSetupModal open={showFirebaseSetup} onClose={() => setShowFirebaseSetup(false)} />
