@@ -1603,6 +1603,7 @@ function App() {
       }
     }
     setStaffUnlocked(true);
+    setRole("staff-orders"); // เข้าหน้าออร์เดอร์ร้านทันทีหลัง PIN ผ่าน (ไม่มีมุมมองลูกค้าในหน้าพนักงานแล้ว)
   };
 
   // ฟัง Firestore แบบ real-time — ทุกเครื่องที่เปิดแอปนี้ (มือถือลูกค้า, แท็บเล็ตพนักงาน)
@@ -1623,6 +1624,46 @@ function App() {
       );
     return unsubscribe;
   }, []);
+
+  // ฟังเมนูจาก Firestore แบบเดียวกัน — เก็บเมนูทั้งชุดไว้ในเอกสารเดียว (config/menu)
+  // เพราะเป็นลิสต์ที่แก้ทั้งก้อนพร้อมกันเสมอ ไม่ใช่รายการที่เพิ่มทีละแถวแบบออร์เดอร์
+  // พอพนักงานแก้เมนูจากเครื่องไหน ทุกเครื่อง (รวมถึงลูกค้า) จะเห็นการเปลี่ยนแปลงแบบเรียลไทม์ทันที
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("menu")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && Array.isArray(doc.data().items)) {
+            setMenu(doc.data().items);
+          } else {
+            // เอกสารยังไม่เคยถูกสร้าง (ร้านเพิ่งเชื่อม Firebase ครั้งแรก) — เอาเมนูตั้งต้นไปตั้งเป็นค่าเริ่มต้นให้
+            db.collection("config").doc("menu").set({ items: initialMenu }).catch((err) => {
+              console.error("ตั้งค่าเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
+            });
+          }
+        },
+        (err) => {
+          console.error("Firestore menu subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // เขียนเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/เปิดปิดขาย)
+  // ห่อ setMenu เดิมไว้ชั้นหนึ่ง — MenuManagerView เรียกใช้เหมือนเดิมทุกอย่าง ไม่ต้องแก้โค้ดฝั่งนั้น
+  const updateMenu = (updater) => {
+    setMenu((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config").doc("menu").set({ items: next }).catch((err) => {
+          console.error("บันทึกเมนูขึ้น Firestore ไม่สำเร็จ:", err);
+        });
+      }
+      return next;
+    });
+  };
 
   const placeOrder = async (paymentMethod, slip, customer) => {
     // เลขออร์เดอร์แบบง่าย ๆ จากเลขท้ายเวลา — เหมาะกับร้านเล็กที่ออร์เดอร์ไม่ถี่มาก
@@ -1751,7 +1792,7 @@ function App() {
           ส่วนปุ่มตั้งค่าซิงค์กับปุ่มออกจากโหมดพนักงาน เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ
           ซ่อนแถบทั้งหมดตอนพนักงานกด "มุมมองลูกค้า" แล้วเดินเข้าสู่ขั้นตอนชำระเงิน/สั่งสำเร็จ —
           ให้หน้าจอตอนนั้นเหมือนเป็นลูกค้าจริง ๆ ไม่มีแถบพนักงานค้างอยู่ด้านบนให้สับสน */}
-      {staffUnlocked && !(role === "customer" && customerStage !== "menu") && (
+      {staffUnlocked && (
         <>
           <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
             <div
@@ -1759,7 +1800,6 @@ function App() {
               className="rounded-2xl p-1 flex gap-1 shadow-sm"
             >
               {[
-                { id: "customer", label: "มุมมองลูกค้า" },
                 { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
                 { id: "staff-menu", label: "จัดการเมนู" },
               ].map((t) => (
@@ -1811,18 +1851,6 @@ function App() {
 
       <FirebaseSetupModal open={showFirebaseSetup} onClose={() => setShowFirebaseSetup(false)} />
 
-      {/* ปุ่มลอยกลับสู่มุมมองพนักงาน — โผล่เฉพาะตอนพนักงานกำลังพรีวิวหน้าลูกค้าแล้วเดินเข้าสู่ขั้นตอนชำระเงิน/สั่งสำเร็จ
-          (ตอนนั้นแถบแท็บด้านบนถูกซ่อนไปแล้ว เพื่อให้เหมือนหน้าจอลูกค้าจริง) */}
-      {staffUnlocked && role === "customer" && customerStage !== "menu" && (
-        <button
-          onClick={() => { setCustomerStage("menu"); setCart([]); setRole("staff-orders"); }}
-          style={{ background: COLORS.ink, color: "#FFF9F0" }}
-          className="fixed top-3 left-1/2 -translate-x-1/2 z-40 text-[11px] font-semibold px-3.5 py-2 rounded-full shadow-md flex items-center gap-1"
-        >
-          <ArrowLeft size={12} /> กลับสู่มุมมองพนักงาน
-        </button>
-      )}
-
       <div className="w-full max-w-md flex-1">
         {role === "customer" && customerStage === "menu" && (
           <CustomerView
@@ -1856,7 +1884,7 @@ function App() {
             onDeleteDone={deleteDoneOrders}
           />
         )}
-        {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={setMenu} />}
+        {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} />}
       </div>
     </div>
   );
