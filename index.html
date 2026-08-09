@@ -657,101 +657,51 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
+function CheckoutView({ cart, onBack, onPaid, orders }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [slipImg, setSlipImg] = useState(null); // { dataUrl, url }
+  const [compressing, setCompressing] = useState(false);
+  const [slipImg, setSlipImg] = useState(null); // { dataUrl, url } — url == dataUrl เสมอ (เก็บฝังใน Firestore ตรง ๆ)
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [custName, setCustName] = useState("");
   const [custHouseNo, setCustHouseNo] = useState("");
   const [custError, setCustError] = useState(false);
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   const isCash = method === "cash";
-  // เก็บ promise ของการอัปโหลดสลิปไว้ เผื่อลูกค้ากดยืนยันก่อนอัปโหลดจะเสร็จ
-  // จะได้ตามไปแปะ URL เข้าออร์เดอร์ที่สร้างไปแล้วทีหลัง (ดูใน handleConfirm)
-  const uploadPromiseRef = useRef(null);
-
-  // พยายามอัปโหลดรูปขึ้น Firebase Storage ซ้ำหลายครั้ง (เผื่อเน็ตกระตุก/หลุดระหว่างอัป)
-  // ก่อนจะถือว่าอัปโหลดไม่สำเร็จจริง ๆ
-  const uploadSlipWithRetry = async (blob, maxAttempts = 4) => {
-    let lastErr;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const path = `slips/${Date.now()}-slip.jpg`;
-        const fileRef = storage.ref(path);
-        await fileRef.put(blob, { contentType: "image/jpeg" });
-        return await fileRef.getDownloadURL();
-      } catch (err) {
-        lastErr = err;
-        if (attempt < maxAttempts) {
-          // รอนานขึ้นเรื่อย ๆ ก่อนลองใหม่ (1s, 2s, 3s...) กันยิงถี่ตอนเน็ตแย่
-          await new Promise((r) => setTimeout(r, attempt * 1000));
-        }
-      }
-    }
-    throw lastErr;
-  };
 
   // แค่เก็บรูปสลิปไว้ให้พนักงานเปิดดูเอง — ไม่มีการอ่าน/ตรวจสอบอัตโนมัติใด ๆ
+  // รูปจะถูกบีบอัดแล้วฝังลง Firestore โดยตรง (ไม่ผ่าน Firebase Storage เพราะ Storage
+  // ต้องผูกบัตร/อัปเกรดเป็นแผน Blaze ตั้งแต่ ก.พ. 2026 เป็นต้นมา ร้านนี้เลยไม่ใช้)
+  // จึงไม่มีขั้นตอนอัปโหลดขึ้นเน็ตแยกต่างหาก — บีบอัดเสร็จก็พร้อมใช้ทันที ไม่ต้องรอเน็ต
   const handleSlipUpload = async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    let dataUrl, blob;
+    setCompressing(true);
+    let dataUrl;
     try {
-      // ย่อ/บีบอัดรูปก่อนเสมอ (รูปจากกล้องมือถือมักใหญ่หลาย MB) — ทั้งเพื่อให้
-      // preview โหลดไวขึ้น และไฟล์ที่อัปขึ้น Firebase Storage เล็กลงมาก อัปเร็วขึ้นมาก
-      // (1000px + คุณภาพ 0.72 ยังอ่านตัวเลข/ยอดเงินในสลิปได้ชัดปกติ)
+      // บีบให้เล็กพอฝังใน Firestore ได้สบาย ๆ (เอกสารจำกัดที่ 1MB/ชิ้น) —
+      // 1000px + คุณภาพ 0.72 ปกติเหลือแค่ ~150-400KB ยังอ่านตัวเลข/ยอดเงินในสลิปได้ชัด
       const compressed = await compressImage(file, 1000, 0.72);
       dataUrl = compressed.dataUrl;
-      blob = compressed.blob;
     } catch (compressErr) {
       // เผื่อบีบอัดไม่สำเร็จ (บราวเซอร์แปลก ๆ) — fallback ไปใช้ไฟล์ต้นฉบับแทน
       console.error("Compress slip failed, using original file:", compressErr);
-      blob = file;
       dataUrl = await new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
         reader.readAsDataURL(file);
       });
     }
-
-    setSlipImg({ dataUrl, url: null });
-    setUploading(true);
-
-    if (FIREBASE_SYNC_ENABLED) {
-      // อัปโหลดรูป (ที่บีบอัดแล้ว) ขึ้น Firebase Storage เพื่อเอา URL ไปเก็บใน Firestore
-      // แทนการฝัง base64 ตรง ๆ (เอกสารจะเล็ก โหลดเร็ว และพนักงานเปิดดูรูปจากเครื่องไหนก็ได้)
-      // เก็บ promise ไว้ใน ref — ไม่ await ตรงนี้ เพื่อไม่บล็อกลูกค้าจากการกดยืนยันระหว่างรอ
-      const uploadPromise = uploadSlipWithRetry(blob)
-        .then((url) => {
-          setSlipImg((prev) => (prev ? { ...prev, url } : prev));
-          setUploading(false);
-          return url;
-        })
-        .catch((uploadErr) => {
-          // อัปโหลดไม่สำเร็จแม้ลองซ้ำแล้ว — ลูกค้ายังกดยืนยันต่อได้ตามปกติ
-          // แค่พนักงานจะไม่มีรูปสลิปให้เปิดดูย้อนหลังจากอุปกรณ์เครื่องอื่น
-          console.error("Slip upload failed after retries:", uploadErr);
-          setUploading(false);
-          return null;
-        });
-      uploadPromiseRef.current = uploadPromise;
-    } else {
-      // โหมดออฟไลน์ (ยังไม่เปิด Firebase) — ใช้ dataUrl ในเครื่องแทน URL ออนไลน์ไปก่อน
-      setSlipImg((prev) => (prev ? { ...prev, url: prev.dataUrl } : prev));
-      uploadPromiseRef.current = Promise.resolve(dataUrl);
-      setUploading(false);
-    }
+    setSlipImg({ dataUrl, url: dataUrl });
+    setCompressing(false);
   };
 
   const removeSlip = () => {
     setSlipImg(null);
-    uploadPromiseRef.current = null;
   };
 
-  const handleConfirm = async () => {
+  const handleConfirm = () => {
     if (!custName.trim() || !custHouseNo.trim()) {
       setCustError(true);
       return;
@@ -764,16 +714,10 @@ function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
     }
     if (!slipImg) return;
     setPaying(true);
-    // ส่งออร์เดอร์ทันทีด้วยข้อมูลที่มีตอนนี้ (ไม่รอให้อัปโหลดขึ้น Firebase เสร็จ) —
-    // ถ้า url ยังไม่มา จะใช้ dataUrl ไปพลางก่อน แล้วค่อยแปะ url จริงทีหลังตอนอัปเสร็จ
-    const stillUploading = !slipImg.url;
-    const docId = await onPaid(method, { url: slipImg?.url || null, dataUrl: slipImg?.dataUrl || null }, customer);
-    setPaying(false);
-    if (stillUploading && docId && uploadPromiseRef.current) {
-      uploadPromiseRef.current.then((url) => {
-        if (url) onSlipReady(docId, url);
-      });
-    }
+    setTimeout(() => {
+      setPaying(false);
+      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer);
+    }, 400);
   };
 
   return (
@@ -912,7 +856,7 @@ function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
               โอนผ่านแอปธนาคาร/พร้อมเพย์ ฿{total} แล้วอัปโหลดรูปสลิปที่นี่ พนักงานจะตรวจสอบสลิปให้อีกครั้งก่อนเริ่มทำออร์เดอร์
             </p>
 
-            {!slipImg && (
+            {!slipImg && !compressing && (
               <label
                 style={{ border: `1.5px dashed ${COLORS.caramel}`, color: COLORS.caramelDark, background: COLORS.peachSoft }}
                 className="w-full flex flex-col items-center justify-center gap-1.5 rounded-xl py-6 cursor-pointer text-xs font-semibold"
@@ -921,6 +865,16 @@ function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
                 เลือกรูปสลิปจากเครื่อง
                 <input type="file" accept="image/*" onChange={handleSlipUpload} className="hidden" />
               </label>
+            )}
+
+            {!slipImg && compressing && (
+              <div
+                style={{ border: `1.5px dashed ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="w-full flex flex-col items-center justify-center gap-1.5 rounded-xl py-6 text-xs font-semibold"
+              >
+                <Loader2 size={22} className="animate-spin" />
+                กำลังเตรียมรูป...
+              </div>
             )}
 
             {slipImg && (
@@ -937,15 +891,9 @@ function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
                   />
                 </button>
                 <div className="flex-1 min-w-0">
-                  {uploading ? (
-                    <span style={{ color: COLORS.inkSoft }} className="text-xs font-medium flex items-center gap-1.5">
-                      <Loader2 size={13} className="animate-spin" /> กำลังอัปโหลดรูป...
-                    </span>
-                  ) : (
-                    <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1">
-                      <Check size={12} /> แนบรูปแล้ว
-                    </span>
-                  )}
+                  <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1">
+                    <Check size={12} /> แนบรูปแล้ว
+                  </span>
                   <div className="flex items-center gap-3 mt-2">
                     <button onClick={() => setZoomedSlip(slipImg.dataUrl)} style={{ color: COLORS.caramelDark }} className="text-xs font-semibold underline underline-offset-2">
                       ดูรูปใหญ่
@@ -1990,23 +1938,6 @@ function App() {
     }
   };
 
-  // แปะ URL รูปสลิปที่อัปโหลดขึ้น Firebase Storage สำเร็จ (แบบ background หลังส่งออร์เดอร์ไปแล้ว)
-  // เข้าไปในออร์เดอร์ที่สร้างไว้แล้ว — ใช้ตอนลูกค้ากดยืนยันก่อนอัปโหลดจะเสร็จ
-  const updateOrderSlipUrl = async (orderId, url) => {
-    if (!orderId || !url) return;
-    if (FIREBASE_SYNC_ENABLED && !orderId.startsWith("local-")) {
-      try {
-        await db.collection("orders").doc(orderId).update({ "slip.url": url });
-      } catch (err) {
-        console.error("Failed to attach slip url to order:", err);
-      }
-    } else {
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, slip: { ...(o.slip || {}), url } } : o))
-      );
-    }
-  };
-
   const advanceOrder = async (id) => {
     const order = orders.find((o) => o.id === id);
     if (!order) return;
@@ -2174,7 +2105,6 @@ function App() {
             cart={cart}
             onBack={() => setCustomerStage("menu")}
             onPaid={placeOrder}
-            onSlipReady={updateOrderSlipUrl}
             orders={orders}
           />
         )}
