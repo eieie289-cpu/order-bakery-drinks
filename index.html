@@ -27,7 +27,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useMemo, useEffect } = React;
+const { useState, useMemo, useEffect, useRef } = React;
 
 
 // ---------- Design tokens ----------
@@ -228,6 +228,36 @@ function compressImage(file, maxDimension = 1280, quality = 0.8) {
     };
     img.src = objectUrl;
   });
+}
+
+// เสียง/สั่นเตือนตอนมีออร์เดอร์ใหม่เข้ามาในหน้าพนักงาน — สร้างเสียง "ติ๊ง-ต่อง" สั้น ๆ
+// ด้วย Web Audio API เอง ไม่ต้องใช้ไฟล์เสียงภายนอก (บางเบราว์เซอร์ต้องมีการแตะหน้าจอ
+// มาก่อนอย่างน้อย 1 ครั้งถึงจะเล่นเสียงได้ ซึ่งพนักงานกด PIN เข้ามาแล้วนับเป็นการแตะแล้ว)
+function playNewOrderAlert() {
+  try {
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const playTone = (freq, startTime, duration) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.3, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.05);
+    };
+    const now = ctx.currentTime;
+    playTone(880, now, 0.15);
+    playTone(1175, now + 0.16, 0.22);
+  } catch (err) {
+    console.error("Play new-order alert failed:", err);
+  }
 }
 
 function PrimaryButton({ children, onClick, disabled, full, style }) {
@@ -627,7 +657,7 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders }) {
+function CheckoutView({ cart, onBack, onPaid, onSlipReady, orders }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -638,6 +668,30 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
   const [custError, setCustError] = useState(false);
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   const isCash = method === "cash";
+  // เก็บ promise ของการอัปโหลดสลิปไว้ เผื่อลูกค้ากดยืนยันก่อนอัปโหลดจะเสร็จ
+  // จะได้ตามไปแปะ URL เข้าออร์เดอร์ที่สร้างไปแล้วทีหลัง (ดูใน handleConfirm)
+  const uploadPromiseRef = useRef(null);
+
+  // พยายามอัปโหลดรูปขึ้น Firebase Storage ซ้ำหลายครั้ง (เผื่อเน็ตกระตุก/หลุดระหว่างอัป)
+  // ก่อนจะถือว่าอัปโหลดไม่สำเร็จจริง ๆ
+  const uploadSlipWithRetry = async (blob, maxAttempts = 4) => {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const path = `slips/${Date.now()}-slip.jpg`;
+        const fileRef = storage.ref(path);
+        await fileRef.put(blob, { contentType: "image/jpeg" });
+        return await fileRef.getDownloadURL();
+      } catch (err) {
+        lastErr = err;
+        if (attempt < maxAttempts) {
+          // รอนานขึ้นเรื่อย ๆ ก่อนลองใหม่ (1s, 2s, 3s...) กันยิงถี่ตอนเน็ตแย่
+          await new Promise((r) => setTimeout(r, attempt * 1000));
+        }
+      }
+    }
+    throw lastErr;
+  };
 
   // แค่เก็บรูปสลิปไว้ให้พนักงานเปิดดูเอง — ไม่มีการอ่าน/ตรวจสอบอัตโนมัติใด ๆ
   const handleSlipUpload = async (e) => {
@@ -647,8 +701,9 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
     let dataUrl, blob;
     try {
       // ย่อ/บีบอัดรูปก่อนเสมอ (รูปจากกล้องมือถือมักใหญ่หลาย MB) — ทั้งเพื่อให้
-      // preview โหลดไวขึ้น และไฟล์ที่อัปขึ้น Firebase Storage เล็กลงมาก อัปเร็วขึ้น
-      const compressed = await compressImage(file);
+      // preview โหลดไวขึ้น และไฟล์ที่อัปขึ้น Firebase Storage เล็กลงมาก อัปเร็วขึ้นมาก
+      // (1000px + คุณภาพ 0.72 ยังอ่านตัวเลข/ยอดเงินในสลิปได้ชัดปกติ)
+      const compressed = await compressImage(file, 1000, 0.72);
       dataUrl = compressed.dataUrl;
       blob = compressed.blob;
     } catch (compressErr) {
@@ -668,29 +723,35 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
     if (FIREBASE_SYNC_ENABLED) {
       // อัปโหลดรูป (ที่บีบอัดแล้ว) ขึ้น Firebase Storage เพื่อเอา URL ไปเก็บใน Firestore
       // แทนการฝัง base64 ตรง ๆ (เอกสารจะเล็ก โหลดเร็ว และพนักงานเปิดดูรูปจากเครื่องไหนก็ได้)
-      try {
-        const path = `slips/${Date.now()}-slip.jpg`;
-        const fileRef = storage.ref(path);
-        await fileRef.put(blob, { contentType: "image/jpeg" });
-        const url = await fileRef.getDownloadURL();
-        setSlipImg((prev) => (prev ? { ...prev, url } : prev));
-      } catch (uploadErr) {
-        // อัปโหลดรูปไม่สำเร็จ (เช่น ยังไม่ได้ตั้งค่า Firebase Storage) — ลูกค้ายังกดยืนยันต่อได้
-        // แค่พนักงานจะไม่มีรูปสลิปให้เปิดดูย้อนหลังจากอุปกรณ์เครื่องอื่น
-        console.error("Slip upload failed:", uploadErr);
-      }
+      // เก็บ promise ไว้ใน ref — ไม่ await ตรงนี้ เพื่อไม่บล็อกลูกค้าจากการกดยืนยันระหว่างรอ
+      const uploadPromise = uploadSlipWithRetry(blob)
+        .then((url) => {
+          setSlipImg((prev) => (prev ? { ...prev, url } : prev));
+          setUploading(false);
+          return url;
+        })
+        .catch((uploadErr) => {
+          // อัปโหลดไม่สำเร็จแม้ลองซ้ำแล้ว — ลูกค้ายังกดยืนยันต่อได้ตามปกติ
+          // แค่พนักงานจะไม่มีรูปสลิปให้เปิดดูย้อนหลังจากอุปกรณ์เครื่องอื่น
+          console.error("Slip upload failed after retries:", uploadErr);
+          setUploading(false);
+          return null;
+        });
+      uploadPromiseRef.current = uploadPromise;
     } else {
       // โหมดออฟไลน์ (ยังไม่เปิด Firebase) — ใช้ dataUrl ในเครื่องแทน URL ออนไลน์ไปก่อน
       setSlipImg((prev) => (prev ? { ...prev, url: prev.dataUrl } : prev));
+      uploadPromiseRef.current = Promise.resolve(dataUrl);
+      setUploading(false);
     }
-    setUploading(false);
   };
 
   const removeSlip = () => {
     setSlipImg(null);
+    uploadPromiseRef.current = null;
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!custName.trim() || !custHouseNo.trim()) {
       setCustError(true);
       return;
@@ -703,10 +764,16 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
     }
     if (!slipImg) return;
     setPaying(true);
-    setTimeout(() => {
-      setPaying(false);
-      onPaid(method, { url: slipImg?.url || null, dataUrl: slipImg?.dataUrl || null }, customer);
-    }, 700);
+    // ส่งออร์เดอร์ทันทีด้วยข้อมูลที่มีตอนนี้ (ไม่รอให้อัปโหลดขึ้น Firebase เสร็จ) —
+    // ถ้า url ยังไม่มา จะใช้ dataUrl ไปพลางก่อน แล้วค่อยแปะ url จริงทีหลังตอนอัปเสร็จ
+    const stillUploading = !slipImg.url;
+    const docId = await onPaid(method, { url: slipImg?.url || null, dataUrl: slipImg?.dataUrl || null }, customer);
+    setPaying(false);
+    if (stillUploading && docId && uploadPromiseRef.current) {
+      uploadPromiseRef.current.then((url) => {
+        if (url) onSlipReady(docId, url);
+      });
+    }
   };
 
   return (
@@ -896,11 +963,9 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
 
       <ImageLightbox src={zoomedSlip} onClose={() => setZoomedSlip(null)} />
 
-      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && (!slipImg || uploading))}>
+      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && !slipImg)}>
         {paying
           ? "กำลังดำเนินการ..."
-          : !isCash && uploading
-          ? "กำลังอัปโหลดรูปสลิป..."
           : isCash
           ? "ยืนยันสั่งอาหาร"
           : `ยืนยันการโอน ฿${total}`}
@@ -1233,7 +1298,7 @@ function MenuManagerView({ menu, setMenu }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [confirmDeleteDone, setConfirmDeleteDone] = useState(false); // รอ confirm ลบที่เสร็จแล้วทั้งหมด
@@ -1322,6 +1387,14 @@ function StaffOrdersView({ orders, onAdvance, onCancel, onDelete, onDeleteDone, 
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {recentOrderIds && recentOrderIds.has(order.id) && (
+                    <span
+                      style={{ background: "#C0533F", color: "#FFF9F0" }}
+                      className="text-[10px] font-bold px-2 py-1 rounded-full animate-pulse"
+                    >
+                      ใหม่!
+                    </span>
+                  )}
                   <span
                     style={{ background: meta.bg, color: meta.color }}
                     className="text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1"
@@ -1730,6 +1803,7 @@ function App() {
   const [menu, setMenu] = useState(initialMenu);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [recentOrderIds, setRecentOrderIds] = useState(new Set()); // ออร์เดอร์ที่เพิ่งเข้ามาสด ๆ (ไว้ไฮไลต์ชั่วคราว)
   const [customerStage, setCustomerStage] = useState("menu"); // menu | checkout | success
   const [lastOrderNo, setLastOrderNo] = useState(null);
   const [lastPaymentMethod, setLastPaymentMethod] = useState(null);
@@ -1794,6 +1868,9 @@ function App() {
   // ฟัง Firestore แบบ real-time — ทุกเครื่องที่เปิดแอปนี้ (มือถือลูกค้า, แท็บเล็ตพนักงาน)
   // จะเห็นรายการออร์เดอร์ชุดเดียวกัน อัปเดตสดโดยไม่ต้องรีเฟรช
   // (โหมดออฟไลน์ — ไม่ทำอะไรตรงนี้ ออร์เดอร์อยู่แค่ใน state ของเครื่องนี้เครื่องเดียว)
+  // เก็บ id ออร์เดอร์ล่าสุดที่ sync มาไว้เทียบรอบถัดไป (ref เพราะไม่ต้องการ re-render ตอนนี้เปลี่ยน)
+  const prevOrderIdsRef = useRef(null);
+
   useEffect(() => {
     if (!FIREBASE_SYNC_ENABLED) return;
     const unsubscribe = db
@@ -1801,14 +1878,36 @@ function App() {
       .orderBy("createdAt", "asc")
       .onSnapshot(
         (snap) => {
-          setOrders(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+          const newOrders = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+          // ถ้ามีออร์เดอร์ใหม่โผล่มา (เทียบกับรอบก่อนหน้า) และพนักงานปลดล็อกอยู่ —
+          // เล่นเสียง/สั่นเตือน + ไฮไลต์ออร์เดอร์นั้นชั่วคราว ให้รู้ทันทีไม่ต้องรีเฟรชเอง
+          // (ข้ามรอบแรกสุดตอนเพิ่งโหลดหน้า เพื่อไม่ให้เตือนรัวกับออร์เดอร์เก่าที่มีอยู่แล้ว)
+          if (prevOrderIdsRef.current) {
+            const newlyArrivedIds = newOrders
+              .filter((o) => !prevOrderIdsRef.current.has(o.id))
+              .map((o) => o.id);
+            if (newlyArrivedIds.length > 0 && staffUnlocked) {
+              playNewOrderAlert();
+              setRecentOrderIds((prev) => new Set([...prev, ...newlyArrivedIds]));
+              setTimeout(() => {
+                setRecentOrderIds((prev) => {
+                  const next = new Set(prev);
+                  newlyArrivedIds.forEach((id) => next.delete(id));
+                  return next;
+                });
+              }, 20000);
+            }
+          }
+          prevOrderIdsRef.current = new Set(newOrders.map((o) => o.id));
+          setOrders(newOrders);
         },
         (err) => {
           console.error("Firestore orders subscription failed:", err);
         }
       );
     return unsubscribe;
-  }, []);
+  }, [staffUnlocked]);
 
   // ฟังเมนูจาก Firestore แบบเดียวกัน — เก็บเมนูทั้งชุดไว้ในเอกสารเดียว (config/menu)
   // เพราะเป็นลิสต์ที่แก้ทั้งก้อนพร้อมกันเสมอ ไม่ใช่รายการที่เพิ่มทีละแถวแบบออร์เดอร์
@@ -1866,21 +1965,46 @@ function App() {
     };
     if (FIREBASE_SYNC_ENABLED) {
       try {
-        await db.collection("orders").add(newOrder);
+        const docRef = await db.collection("orders").add(newOrder);
+        setLastOrderNo(orderNo);
+        setLastPaymentMethod(paymentMethod);
+        setLastCustomer(customer || null);
+        setCart([]);
+        setCustomerStage("success");
+        return docRef.id;
       } catch (err) {
         console.error("Failed to place order:", err);
         alert("ส่งออร์เดอร์ไม่สำเร็จ ลองใหม่อีกครั้ง");
-        return;
+        return null;
       }
     } else {
       // โหมดออฟไลน์ — เก็บไว้ใน state ของเครื่องนี้เท่านั้น (รีเฟรชหน้าแล้วจะหาย)
-      setOrders((prev) => [...prev, { id: `local-${orderNo}`, ...newOrder }]);
+      const localId = `local-${orderNo}`;
+      setOrders((prev) => [...prev, { id: localId, ...newOrder }]);
+      setLastOrderNo(orderNo);
+      setLastPaymentMethod(paymentMethod);
+      setLastCustomer(customer || null);
+      setCart([]);
+      setCustomerStage("success");
+      return localId;
     }
-    setLastOrderNo(orderNo);
-    setLastPaymentMethod(paymentMethod);
-    setLastCustomer(customer || null);
-    setCart([]);
-    setCustomerStage("success");
+  };
+
+  // แปะ URL รูปสลิปที่อัปโหลดขึ้น Firebase Storage สำเร็จ (แบบ background หลังส่งออร์เดอร์ไปแล้ว)
+  // เข้าไปในออร์เดอร์ที่สร้างไว้แล้ว — ใช้ตอนลูกค้ากดยืนยันก่อนอัปโหลดจะเสร็จ
+  const updateOrderSlipUrl = async (orderId, url) => {
+    if (!orderId || !url) return;
+    if (FIREBASE_SYNC_ENABLED && !orderId.startsWith("local-")) {
+      try {
+        await db.collection("orders").doc(orderId).update({ "slip.url": url });
+      } catch (err) {
+        console.error("Failed to attach slip url to order:", err);
+      }
+    } else {
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, slip: { ...(o.slip || {}), url } } : o))
+      );
+    }
   };
 
   const advanceOrder = async (id) => {
@@ -2050,6 +2174,7 @@ function App() {
             cart={cart}
             onBack={() => setCustomerStage("menu")}
             onPaid={placeOrder}
+            onSlipReady={updateOrderSlipUrl}
             orders={orders}
           />
         )}
@@ -2064,6 +2189,7 @@ function App() {
         {role === "staff-orders" && (
           <StaffOrdersView
             orders={orders}
+            recentOrderIds={recentOrderIds}
             onAdvance={advanceOrder}
             onCancel={cancelOrder}
             onDelete={deleteOrder}
