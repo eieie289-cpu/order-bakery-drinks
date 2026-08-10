@@ -970,12 +970,26 @@ function MenuManagerView({ menu, setMenu }) {
     setNewAddOnPrice("");
   };
 
-  const handlePhotoUpload = (e) => {
+  // รูปเมนูจะถูกบีบอัดก่อนเก็บเสมอ (จำเป็นกว่ารูปสลิปอีก เพราะเมนูทั้งร้าน
+  // ถูกเก็บรวมกันไว้ใน Firestore document เดียว ซึ่งจำกัดขนาดที่ 1MB/document —
+  // ถ้าไม่บีบอัด อัปโหลดรูปจากกล้องมือถือ 2-3 เมนูก็เกิน 1MB ทำให้บันทึกเมนูทั้งร้านไม่ผ่านเลย)
+  // รูปเมนูแสดงผลเล็กสุดแค่ ~80px บนจอ เลยบีบได้แน่นกว่ารูปสลิปที่ต้องอ่านตัวหนังสือ
+  const [photoError, setPhotoError] = useState("");
+
+  const handlePhotoUpload = async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setForm((f) => ({ ...f, img: reader.result }));
-    reader.readAsDataURL(file);
+    setPhotoError("");
+    try {
+      const { dataUrl } = await compressImage(file, 500, 0.7);
+      setForm((f) => ({ ...f, img: dataUrl }));
+    } catch (err) {
+      console.error("Compress menu photo failed, using original file:", err);
+      const reader = new FileReader();
+      reader.onload = () => setForm((f) => ({ ...f, img: reader.result }));
+      reader.onerror = () => setPhotoError("อ่านรูปไม่สำเร็จ ลองรูปอื่นดูนะครับ");
+      reader.readAsDataURL(file);
+    }
   };
 
   const addAddOn = () => {
@@ -1132,6 +1146,9 @@ function MenuManagerView({ menu, setMenu }) {
                     </button>
                   )}
                 </div>
+                {photoError && (
+                  <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{photoError}</p>
+                )}
               </div>
               <div className="flex gap-2">
                 {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
@@ -1764,6 +1781,8 @@ function App() {
   const [staffUnlocked, setStaffUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState(false);
+  const [showUidScreen, setShowUidScreen] = useState(false); // จอโชว์รหัสอุปกรณ์ให้พนักงานอ่านบอกเจ้าของร้าน
+  const [uidCopied, setUidCopied] = useState(false);
   const [uid, setUid] = useState(null); // ทุกคนที่เปิดแอป (ลูกค้า/พนักงาน) ได้ uid นิรนามจาก Firebase Auth (เฉพาะตอนเปิด sync)
 
   useEffect(() => {
@@ -1797,12 +1816,33 @@ function App() {
       return;
     }
     setPinError(false);
-    // หมายเหตุ: ก่อนหน้านี้ตรงนี้เคยพยายามเขียน staffUids/{uid} เองจาก client
-    // แต่นั่นคือช่องโหว่ (ใครก็เขียนเองได้โดยไม่ต้องรู้ PIN) เลยเอาออก —
-    // ตอนนี้สิทธิ์ staff ใน Firestore ต้องให้เจ้าของร้านเพิ่ม uid เองผ่าน Firebase Console เท่านั้น
-    // (ดู uid ได้จาก firebase.auth().currentUser.uid ใน Console ของเบราว์เซอร์คนนั้น)
+    if (FIREBASE_SYNC_ENABLED) {
+      // หมายเหตุ: เดิมตรงนี้เคยเขียน staffUids/{uid} เองจาก client — เป็นช่องโหว่
+      // (ใครก็เขียนเองได้โดยไม่ต้องรู้ PIN เลย เพราะทุกคนมี anonymous auth อยู่แล้ว)
+      // ตอนนี้สิทธิ์ staff ต้องให้เจ้าของร้านเพิ่ม uid เองผ่าน Firebase Console เท่านั้น —
+      // เลยแค่โชว์รหัส uid ของเครื่องนี้ให้พนักงานอ่าน แล้วไปบอกเจ้าของร้าน
+      setShowUidScreen(true);
+    } else {
+      setStaffUnlocked(true);
+      setRole("staff-orders");
+    }
+  };
+
+  const proceedToStaff = () => {
+    setShowUidScreen(false);
     setStaffUnlocked(true);
-    setRole("staff-orders"); // เข้าหน้าออร์เดอร์ร้านทันทีหลัง PIN ผ่าน (ไม่มีมุมมองลูกค้าในหน้าพนักงานแล้ว)
+    setRole("staff-orders"); // เข้าหน้าออร์เดอร์ร้านทันที (ถ้ายังไม่ได้รับสิทธิ์จริง Firestore จะบล็อกการอ่าน/แก้ไขไว้เอง)
+  };
+
+  const copyUid = async () => {
+    if (!uid) return;
+    try {
+      await navigator.clipboard.writeText(uid);
+      setUidCopied(true);
+      setTimeout(() => setUidCopied(false), 2000);
+    } catch (err) {
+      console.error("Copy uid failed:", err);
+    }
   };
 
   // ฟัง Firestore แบบ real-time — ทุกเครื่องที่เปิดแอปนี้ (มือถือลูกค้า, แท็บเล็ตพนักงาน)
@@ -2008,6 +2048,53 @@ function App() {
       setOrders((prev) => prev.filter((o) => o.status !== "cancelled"));
     }
   };
+
+  // Staff link but not unlocked yet → show a PIN screen instead of the app.
+  if (isStaffLink && showUidScreen) {
+    return (
+      <div
+        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        className="w-full min-h-screen flex flex-col items-center justify-center px-6"
+      >
+        <div className="w-full max-w-xs text-center">
+          <div style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
+            <Check size={22} />
+          </div>
+          <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">รหัส PIN ถูกต้อง</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4 leading-relaxed">
+            ถ้านี่คืออุปกรณ์เครื่องแรกที่เข้าใช้หน้าพนักงาน ให้ส่งรหัสด้านล่างนี้ให้เจ้าของร้าน
+            เพื่อเปิดสิทธิ์ให้เครื่องนี้ (ทำครั้งเดียวต่อเครื่อง)
+          </p>
+          <div
+            style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            className="rounded-xl px-3 py-3 text-xs font-mono break-all mb-2 select-all"
+          >
+            {uid}
+          </div>
+          <button
+            type="button"
+            onClick={copyUid}
+            style={{ background: uidCopied ? COLORS.sageSoft : COLORS.peachSoft, color: uidCopied ? COLORS.sage : COLORS.caramelDark }}
+            className="w-full rounded-xl py-2.5 text-sm font-semibold mb-2 flex items-center justify-center gap-1.5"
+          >
+            {uidCopied ? <Check size={15} /> : null}
+            {uidCopied ? "คัดลอกแล้ว" : "คัดลอกรหัส"}
+          </button>
+          <button
+            type="button"
+            onClick={proceedToStaff}
+            style={{ background: COLORS.ink, color: "#FFF9F0" }}
+            className="w-full rounded-xl py-3 text-sm font-semibold"
+          >
+            เข้าหน้าออร์เดอร์ร้าน
+          </button>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-3 leading-relaxed">
+            ถ้าเจ้าของร้านยังไม่ได้เพิ่มรหัสนี้ในระบบ หน้าออร์เดอร์อาจยังโหลดไม่ขึ้น — รอเจ้าของร้านเพิ่มให้ก่อนแล้วลองใหม่
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Staff link but not unlocked yet → show a PIN screen instead of the app.
   if (isStaffLink && !staffUnlocked) {
