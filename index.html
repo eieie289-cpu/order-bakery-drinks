@@ -235,26 +235,38 @@ function compressImage(file, maxDimension = 1280, quality = 0.8) {
 // มาก่อนอย่างน้อย 1 ครั้งถึงจะเล่นเสียงได้ ซึ่งพนักงานกด PIN เข้ามาแล้วนับเป็นการแตะแล้ว)
 function playNewOrderAlert() {
   try {
-    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200, 100, 400]);
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
-    const playTone = (freq, startTime, duration) => {
+    const playTone = (freq, startTime, duration, peakGain = 0.5) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, startTime);
-      gain.gain.exponentialRampToValueAtTime(0.3, startTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(startTime);
       osc.stop(startTime + duration + 0.05);
     };
+    // เสียงยาวขึ้นและดังขึ้น: เล่นทำนอง "ติ๊ง-ต่อง-ติ๊ง-ต่อง" ซ้ำ 2 รอบ กินเวลารวมกว่า 2 วินาที
     const now = ctx.currentTime;
-    playTone(880, now, 0.15);
-    playTone(1175, now + 0.16, 0.22);
+    const pattern = [
+      [880, 0, 0.18],
+      [1175, 0.19, 0.22],
+      [880, 0.46, 0.18],
+      [1175, 0.65, 0.32],
+    ];
+    // รอบที่ 1 + รอบที่ 2 (เว้นช่วงสั้น ๆ ระหว่างรอบ)
+    const cycleLength = 1.1;
+    [0, cycleLength].forEach((cycleOffset) => {
+      pattern.forEach(([freq, offset, duration]) => {
+        playTone(freq, now + cycleOffset + offset, duration, 0.5);
+      });
+    });
   } catch (err) {
     console.error("Play new-order alert failed:", err);
   }
@@ -278,7 +290,7 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout }) {
+function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -359,28 +371,56 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
         <p style={{ color: "#F2DDBE" }} className="text-sm mt-1">
           อบใหม่ทุกวัน · ปั่นสดทุกแก้ว
         </p>
+        <div className="mt-3 flex justify-center">
+          <span
+            style={{
+              background: shopOpen ? "rgba(122,139,111,0.25)" : "rgba(192,83,63,0.25)",
+              color: shopOpen ? "#E4EADD" : "#F3D9D3",
+            }}
+            className="text-xs font-semibold px-3 py-1 rounded-full inline-flex items-center gap-1.5"
+          >
+            <span
+              style={{ background: shopOpen ? "#9FD98A" : "#E07A63" }}
+              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+            />
+            {shopOpen ? "ร้านเปิดอยู่" : "ร้านปิดอยู่ขณะนี้"}
+          </span>
+        </div>
       </div>
 
-      {/* Category tabs */}
+      {!shopOpen && (
+        <div className="px-5 mt-4">
+          <div
+            style={{ background: "#F3D9D3", border: "1px solid #E3B7AC", color: "#8A3A2B" }}
+            className="rounded-2xl px-4 py-3.5 text-sm font-medium text-center"
+          >
+            ขออภัย ขณะนี้ร้านปิดรับออร์เดอร์ชั่วคราว กรุณากลับมาสั่งใหม่ในช่วงที่ร้านเปิดนะครับ
+          </div>
+        </div>
+      )}
+
+      {/* Category tabs — ล็อกไว้ตอนร้านปิด กดเปลี่ยนหมวดไม่ได้ */}
       <div className="flex gap-2 px-5 mt-5 overflow-x-auto pb-1">
         {categories.map((cat) => (
           <button
             key={cat}
-            onClick={() => setOpenCat(cat)}
+            onClick={() => shopOpen && setOpenCat(cat)}
+            disabled={!shopOpen}
             style={{
-              background: openCat === cat ? COLORS.caramel : "#FFFFFF",
+              background: openCat === cat ? (shopOpen ? COLORS.caramel : "#D9CBB5") : "#FFFFFF",
               color: openCat === cat ? "#FFF9F0" : COLORS.inkSoft,
-              border: `1px solid ${openCat === cat ? COLORS.caramel : COLORS.line}`,
+              border: `1px solid ${openCat === cat ? (shopOpen ? COLORS.caramel : "#D9CBB5") : COLORS.line}`,
+              opacity: shopOpen ? 1 : 0.55,
             }}
-            className="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors"
+            className="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors disabled:cursor-not-allowed"
           >
             {cat === "all" ? "ทั้งหมด" : CATEGORY_LABEL[cat]}
           </button>
         ))}
       </div>
 
-      {/* Menu list */}
-      <div className="px-5 mt-4 pb-32 space-y-3">
+      {/* Menu list — ตอนร้านปิด ยังให้ดูเมนูได้แต่กดสั่งไม่ได้ (ปุ่มจางลง + ปิดการทำงาน) */}
+      <div className="px-5 mt-4 pb-32 space-y-3" style={{ opacity: shopOpen ? 1 : 0.6 }}>
         {visibleMenu.length === 0 && (
           <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
             ยังไม่มีเมนูในหมวดนี้
@@ -439,18 +479,20 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
                         </span>
                       )}
                       <button
-                        onClick={() => openAddOnSheet(item)}
-                        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
-                        className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+                        onClick={() => shopOpen && openAddOnSheet(item)}
+                        disabled={!shopOpen}
+                        style={{ background: shopOpen ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
+                        className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                       >
                         <Plus size={16} />
                       </button>
                     </div>
                   ) : !inCart ? (
                     <button
-                      onClick={() => addToCart(item)}
-                      style={{ background: COLORS.caramel, color: "#FFF9F0" }}
-                      className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+                      onClick={() => shopOpen && addToCart(item)}
+                      disabled={!shopOpen}
+                      style={{ background: shopOpen ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
+                      className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                     >
                       <Plus size={16} />
                     </button>
@@ -540,8 +582,8 @@ function CustomerView({ menu, cart, setCart, onCheckout }) {
         </div>
       )}
 
-      {/* Floating cart bar */}
-      {cartCount > 0 && !showCart && (
+      {/* Floating cart bar — ซ่อนไว้ตอนร้านปิด กันลูกค้าไปต่อหน้าชำระเงินไม่ได้ */}
+      {shopOpen && cartCount > 0 && !showCart && (
         <button
           onClick={() => setShowCart(true)}
           style={{ background: COLORS.ink }}
@@ -666,6 +708,7 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
   const [custName, setCustName] = useState("");
   const [custHouseNo, setCustHouseNo] = useState("");
   const [custError, setCustError] = useState(false);
+  const custFormRef = useRef(null);
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   const isCash = method === "cash";
 
@@ -704,6 +747,10 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
   const handleConfirm = () => {
     if (!custName.trim() || !custHouseNo.trim()) {
       setCustError(true);
+      // เลื่อนจอไปที่ฟอร์มชื่อ/บ้านเลขที่ ให้ลูกค้าเห็นทันทีว่าลืมกรอกตรงไหน
+      if (custFormRef.current) {
+        custFormRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       return;
     }
     setCustError(false);
@@ -755,7 +802,7 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
       </div>
 
       <p style={{ color: COLORS.inkSoft }} className="text-xs font-semibold mb-2 px-1">ข้อมูลจัดส่ง</p>
-      <div style={{ background: "#FFFFFF", border: `1px solid ${custError ? "#C0533F" : COLORS.line}` }} className="rounded-2xl p-4 mb-4 space-y-3">
+      <div ref={custFormRef} style={{ background: "#FFFFFF", border: `1px solid ${custError ? "#C0533F" : COLORS.line}` }} className="rounded-2xl p-4 mb-4 space-y-3">
         <div>
           <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">ชื่อลูกค้า</label>
           <input
@@ -1263,7 +1310,7 @@ function MenuManagerView({ menu, setMenu }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled, shopOpen, onToggleShopOpen }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [confirmDeleteDone, setConfirmDeleteDone] = useState(false); // รอ confirm ลบที่เสร็จแล้วทั้งหมด
@@ -1313,6 +1360,35 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-5">อัปเดตแบบเรียลไทม์เมื่อลูกค้าสั่ง</p>
+
+      {/* ปุ่มเปิด/ปิดร้าน — คุมได้ว่าลูกค้าจะสั่งของเข้ามาได้หรือไม่ */}
+      <button
+        onClick={onToggleShopOpen}
+        style={{
+          background: shopOpen ? COLORS.sageSoft : "#F3D9D3",
+          border: `1.5px solid ${shopOpen ? COLORS.sage : "#C0533F"}`,
+        }}
+        className="w-full rounded-2xl px-4 py-3.5 flex items-center justify-between mb-4"
+      >
+        <span className="flex items-center gap-2.5">
+          <span
+            style={{ background: shopOpen ? COLORS.sage : "#C0533F" }}
+            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+          />
+          <span style={{ color: shopOpen ? COLORS.ink : "#8A3A2B" }} className="text-sm font-semibold">
+            {shopOpen ? "ร้านเปิดอยู่ — ลูกค้าสั่งของได้" : "ร้านปิดอยู่ — ลูกค้าสั่งของไม่ได้"}
+          </span>
+        </span>
+        <span
+          style={{
+            background: shopOpen ? "#C0533F" : COLORS.sage,
+            color: "#FFF9F0",
+          }}
+          className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0"
+        >
+          {shopOpen ? "ปิดร้าน" : "เปิดร้าน"}
+        </span>
+      </button>
 
       {sorted.length === 0 && (
         <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
@@ -1767,6 +1843,7 @@ function App() {
   const [role, setRole] = useState("customer"); // customer | staff-menu | staff-orders
   const [menu, setMenu] = useState(initialMenu);
   const [cart, setCart] = useState([]);
+  const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
   const [orders, setOrders] = useState([]);
   const [recentOrderIds, setRecentOrderIds] = useState(new Set()); // ออร์เดอร์ที่เพิ่งเข้ามาสด ๆ (ไว้ไฮไลต์ชั่วคราว)
   const [customerStage, setCustomerStage] = useState("menu"); // menu | checkout | success
@@ -1917,6 +1994,42 @@ function App() {
       );
     return unsubscribe;
   }, []);
+
+  // ฟังสถานะเปิด/ปิดร้านจาก Firestore แบบเดียวกับเมนู — ทุกเครื่อง (ลูกค้า+พนักงาน)
+  // เห็นสถานะเดียวกันแบบเรียลไทม์ พนักงานกดปิดร้านจากเครื่องไหนก็ได้ ลูกค้าทุกคนเห็นทันที
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("shopStatus")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && typeof doc.data().open === "boolean") {
+            setShopOpen(doc.data().open);
+          } else {
+            // เอกสารยังไม่เคยถูกสร้าง — ตั้งค่าเริ่มต้นเป็น "เปิดร้าน"
+            db.collection("config").doc("shopStatus").set({ open: true }).catch((err) => {
+              console.error("ตั้งค่าสถานะร้านเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
+            });
+          }
+        },
+        (err) => {
+          console.error("Firestore shopStatus subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // สลับสถานะเปิด/ปิดร้าน — พนักงานกดจากหน้าออร์เดอร์ร้าน
+  const toggleShopOpen = () => {
+    const next = !shopOpen;
+    setShopOpen(next);
+    if (FIREBASE_SYNC_ENABLED) {
+      db.collection("config").doc("shopStatus").set({ open: next }).catch((err) => {
+        console.error("บันทึกสถานะร้านขึ้น Firestore ไม่สำเร็จ:", err);
+      });
+    }
+  };
 
   // เขียนเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/เปิดปิดขาย)
   // ห่อ setMenu เดิมไว้ชั้นหนึ่ง — MenuManagerView เรียกใช้เหมือนเดิมทุกอย่าง ไม่ต้องแก้โค้ดฝั่งนั้น
@@ -2180,6 +2293,7 @@ function App() {
             cart={cart}
             setCart={setCart}
             onCheckout={() => setCustomerStage("checkout")}
+            shopOpen={shopOpen}
           />
         )}
         {role === "customer" && customerStage === "checkout" && (
@@ -2207,6 +2321,8 @@ function App() {
             onDelete={deleteOrder}
             onDeleteDone={deleteDoneOrders}
             onDeleteCancelled={deleteCancelledOrders}
+            shopOpen={shopOpen}
+            onToggleShopOpen={toggleShopOpen}
           />
         )}
         {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} />}
