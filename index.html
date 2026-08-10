@@ -970,26 +970,12 @@ function MenuManagerView({ menu, setMenu }) {
     setNewAddOnPrice("");
   };
 
-  // รูปเมนูจะถูกบีบอัดก่อนเก็บเสมอ (จำเป็นกว่ารูปสลิปอีก เพราะเมนูทั้งร้าน
-  // ถูกเก็บรวมกันไว้ใน Firestore document เดียว ซึ่งจำกัดขนาดที่ 1MB/document —
-  // ถ้าไม่บีบอัด อัปโหลดรูปจากกล้องมือถือ 2-3 เมนูก็เกิน 1MB ทำให้บันทึกเมนูทั้งร้านไม่ผ่านเลย)
-  // รูปเมนูแสดงผลเล็กสุดแค่ ~80px บนจอ เลยบีบได้แน่นกว่ารูปสลิปที่ต้องอ่านตัวหนังสือ
-  const [photoError, setPhotoError] = useState("");
-
-  const handlePhotoUpload = async (e) => {
+  const handlePhotoUpload = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setPhotoError("");
-    try {
-      const { dataUrl } = await compressImage(file, 500, 0.7);
-      setForm((f) => ({ ...f, img: dataUrl }));
-    } catch (err) {
-      console.error("Compress menu photo failed, using original file:", err);
-      const reader = new FileReader();
-      reader.onload = () => setForm((f) => ({ ...f, img: reader.result }));
-      reader.onerror = () => setPhotoError("อ่านรูปไม่สำเร็จ ลองรูปอื่นดูนะครับ");
-      reader.readAsDataURL(file);
-    }
+    const reader = new FileReader();
+    reader.onload = () => setForm((f) => ({ ...f, img: reader.result }));
+    reader.readAsDataURL(file);
   };
 
   const addAddOn = () => {
@@ -1146,9 +1132,6 @@ function MenuManagerView({ menu, setMenu }) {
                     </button>
                   )}
                 </div>
-                {photoError && (
-                  <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{photoError}</p>
-                )}
               </div>
               <div className="flex gap-2">
                 {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
@@ -1814,18 +1797,10 @@ function App() {
       return;
     }
     setPinError(false);
-    if (FIREBASE_SYNC_ENABLED) {
-      // บันทึกว่า uid นี้ผ่าน PIN แล้ว ลง Firestore — ให้ security rules ของ orders
-      // เช็คสิทธิ์แก้สถานะออร์เดอร์จาก uid นี้ได้ (collection ชื่อ staffUids ต้องตรงกับใน rules)
-      try {
-        if (uid) {
-          await db.collection("staffUids").doc(uid).set({ grantedAt: firebase.firestore.FieldValue.serverTimestamp() });
-        }
-      } catch (err) {
-        console.error("บันทึกสถานะพนักงานไม่สำเร็จ:", err);
-        // ถึง Firestore เขียนไม่ผ่าน ก็ยังปลดล็อกหน้าจอตามปกติ — แค่การแก้ไขออร์เดอร์อาจโดน rules บล็อกภายหลัง
-      }
-    }
+    // หมายเหตุ: ก่อนหน้านี้ตรงนี้เคยพยายามเขียน staffUids/{uid} เองจาก client
+    // แต่นั่นคือช่องโหว่ (ใครก็เขียนเองได้โดยไม่ต้องรู้ PIN) เลยเอาออก —
+    // ตอนนี้สิทธิ์ staff ใน Firestore ต้องให้เจ้าของร้านเพิ่ม uid เองผ่าน Firebase Console เท่านั้น
+    // (ดู uid ได้จาก firebase.auth().currentUser.uid ใน Console ของเบราว์เซอร์คนนั้น)
     setStaffUnlocked(true);
     setRole("staff-orders"); // เข้าหน้าออร์เดอร์ร้านทันทีหลัง PIN ผ่าน (ไม่มีมุมมองลูกค้าในหน้าพนักงานแล้ว)
   };
@@ -1838,6 +1813,9 @@ function App() {
 
   useEffect(() => {
     if (!FIREBASE_SYNC_ENABLED) return;
+    // rules อนุญาต read เฉพาะ staff — ลูกค้าทั่วไปยังไม่ปลดล็อกจะไม่มีสิทธิ์อ่าน
+    // ไม่ subscribe ตั้งแต่แรกเลย กันไม่ให้เจอ permission-denied เต็ม console โดยเปล่าประโยชน์
+    if (!staffUnlocked) return;
     const unsubscribe = db
       .collection("orders")
       .orderBy("createdAt", "asc")
