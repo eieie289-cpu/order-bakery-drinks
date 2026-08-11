@@ -428,7 +428,7 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
+function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -436,6 +436,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
   // ตัวเลือกที่เลือกไว้ เก็บเป็นคีย์ "groupId::optionId" — กันกรณี id ตัวเลือกซ้ำกันคนละกลุ่ม
   // (ข้อมูลเก่าที่บันทึกด้วยบั๊ก id ซ้ำ) ทำให้กดตัวเลือกหนึ่งแล้วไปติ๊กอีกตัวเลือกในกลุ่มอื่นตาม
   const [selectedAddOnKeys, setSelectedAddOnKeys] = useState([]);
+  const [editingCartId, setEditingCartId] = useState(null); // กำลังแก้ไขรายการในตะกร้าอันไหน (null = เพิ่มใหม่)
 
   const categories = ["all", ...Object.keys(CATEGORY_LABEL)];
   const visibleMenu = menu.filter(
@@ -476,6 +477,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
   const openAddOnSheet = (item) => {
     setAddOnSheetFor(item);
     setSelectedAddOnKeys([]);
+    setEditingCartId(null);
   };
 
   const toggleAddOn = (groupId, optionId) => {
@@ -483,12 +485,70 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
     setSelectedAddOnKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
+  const closeAddOnSheet = () => {
+    setAddOnSheetFor(null);
+    setEditingCartId(null);
+  };
+
   const confirmAddOnSheet = () => {
     const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
     const allOptions = groups.flatMap((g) => (g.options || []).map((o) => ({ ...o, gid: g.id })));
     const selected = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
-    addToCart(addOnSheetFor, selected);
+    if (editingCartId) {
+      updateCartItem(editingCartId, selected);
+    } else {
+      addToCart(addOnSheetFor, selected);
+    }
     setAddOnSheetFor(null);
+    setEditingCartId(null);
+  };
+
+  // เปิดชีตเลือกตัวเลือกเพื่อแก้ไขรายการในตะกร้า — ติ๊กคืนชุดตัวเลือกที่เลือกไว้เดิมให้อัตโนมัติ
+  const openEditCartItem = (cartItem) => {
+    const item = menu.find((m) => m.id === cartItem.menuId);
+    if (!item) return;
+    const groups = normalizeAddOnGroups(item.addOns);
+    // ตัวเลือกในตะกร้าเก็บ gid (รหัสกลุ่ม) ไว้แล้ว ใช้ตรงนั้นเลย — กัน id ตัวเลือกซ้ำกันคนละกลุ่ม
+    // (ข้อมูลเก่ามีบั๊ก id ซ้ำ เช่น "ไม่แยกน้ำแข็ง" กับ "ไข่มุก" เป็น ao100 เหมือนกัน)
+    // ตัวเก่าที่ไม่มี gid เผื่อเทียบด้วย (รหัสกลุ่ม + ชื่อตัวเลือก) ให้หายังไงก็ยังตรงกัน
+    const keys = (cartItem.addOns || []).map((a) => {
+      if (a.gid) return `${a.gid}::${a.id}`;
+      const g = groups.find((grp) => (grp.options || []).some((o) => o.id === a.id && o.name === a.name));
+      return `${g ? g.id : "?"}::${a.id}`;
+    });
+    setEditingCartId(cartItem.cartId);
+    setAddOnSheetFor(item);
+    setSelectedAddOnKeys(keys);
+  };
+
+  // บันทึกการแก้ไขรายการในตะกร้า — ถ้าชุดตัวเลือกใหม่ตรงกับรายการอื่นที่มีอยู่แล้ว ให้รวมจำนวนเข้าด้วยกัน
+  const updateCartItem = (oldCartId, selected) => {
+    const oldItem = cart.find((c) => c.cartId === oldCartId);
+    if (!oldItem) return;
+    const menuItem = menu.find((m) => m.id === oldItem.menuId);
+    if (!menuItem) return;
+    const newCartId = selected.length
+      ? `${menuItem.id}::${selected.map((a) => a.id).sort().join(",")}`
+      : menuItem.id;
+    const unitPrice = menuItem.price + selected.reduce((s, a) => s + a.price, 0);
+    setCart((prev) => {
+      const withoutOld = prev.filter((c) => c.cartId !== oldCartId);
+      const existing = withoutOld.find((c) => c.cartId === newCartId);
+      if (existing) {
+        return withoutOld.map((c) =>
+          c.cartId === newCartId ? { ...c, qty: c.qty + oldItem.qty } : c
+        );
+      }
+      return [
+        ...withoutOld,
+        { cartId: newCartId, menuId: menuItem.id, name: menuItem.name, price: unitPrice, basePrice: menuItem.price, addOns: selected, qty: oldItem.qty, note: oldItem.note || "" },
+      ];
+    });
+  };
+
+  // ลบรายการออกจากตะกร้า
+  const removeCartItem = (cartId) => {
+    setCart((prev) => prev.filter((c) => c.cartId !== cartId));
   };
 
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
@@ -564,12 +624,28 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
 
       {/* Menu list — ตอนร้านปิด ยังให้ดูเมนูได้แต่กดสั่งไม่ได้ (ปุ่มจางลง + ปิดการทำงาน) */}
       <div className="px-5 mt-4 pb-32 space-y-3" style={{ opacity: shopOpen ? 1 : 0.6 }}>
-        {visibleMenu.length === 0 && (
+        {!menuLoaded && (
+          // กำลังโหลดเมนูจาก Firestore — แสดงโครงร่าง (skeleton) แทนเมนู seed
+          // เพื่อไม่ให้ตอนเปิดหน้าแรกเห็นรูปที่เป็นลิงก์สต็อก ก่อนจะเปลี่ยนเป็นรูปจริงของร้าน
+          <div className="space-y-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 flex gap-3 items-start">
+                <div className="w-20 h-20 rounded-xl flex-shrink-0 animate-pulse" style={{ background: COLORS.paper }} />
+                <div className="flex-1 space-y-2 py-1">
+                  <div className="h-3.5 w-24 rounded animate-pulse" style={{ background: COLORS.paper }} />
+                  <div className="h-3 w-36 rounded animate-pulse" style={{ background: COLORS.paper }} />
+                  <div className="h-3 w-10 rounded animate-pulse" style={{ background: COLORS.paper }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {menuLoaded && visibleMenu.length === 0 && (
           <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
             ยังไม่มีเมนูในหมวดนี้
           </div>
         )}
-        {visibleMenu.map((item) => {
+        {menuLoaded && visibleMenu.map((item) => {
           const Icon = CATEGORY_ICONS[item.category];
           const hasAddOns = item.addOns && item.addOns.length > 0;
           // สำหรับเมนูที่ไม่มีตัวเลือกเพิ่ม ใช้ cartId ตรงกับ item.id ตรง ๆ (พฤติกรรมเดิม)
@@ -681,16 +757,21 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
         );
         return (
           <div className="fixed inset-0 z-20 flex flex-col justify-end">
-            <div onClick={() => setAddOnSheetFor(null)} className="absolute inset-0 bg-black/30" />
+            <div onClick={closeAddOnSheet} className="absolute inset-0 bg-black/30" />
             <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
               <div className="flex items-center justify-between mb-1">
                 <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
                   {addOnSheetFor.name}
                 </h2>
-                <button onClick={() => setAddOnSheetFor(null)} style={{ color: COLORS.inkSoft }}>
+                <button onClick={closeAddOnSheet} style={{ color: COLORS.inkSoft }}>
                   <X size={20} />
                 </button>
               </div>
+              {editingCartId && (
+                <p style={{ color: COLORS.caramelDark }} className="text-xs font-semibold mb-2">
+                  กำลังแก้ไขรายการในตะกร้า
+                </p>
+              )}
               <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
                 {groups.some((g) => g.required)
                   ? "กลุ่มที่ติดป้าย \"บังคับเลือก\" ต้องเลือกอย่างน้อย 1 รายการ"
@@ -752,7 +833,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
                 </p>
               )}
               <PrimaryButton full onClick={confirmAddOnSheet} disabled={missingRequired}>
-                เพิ่มลงตะกร้า · ฿
+                {editingCartId ? "บันทึกการแก้ไข" : "เพิ่มลงตะกร้า"} · ฿
                 {addOnSheetFor.price + selectedOptions.reduce((s, a) => s + a.price, 0)}
               </PrimaryButton>
             </div>
@@ -842,14 +923,32 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
                       className="w-full rounded-xl px-3 py-2 text-sm resize-none placeholder:text-[13px] focus:outline-none mt-2"
                     />
                   ) : (
-                    <button
-                      onClick={() => setNoteOpenFor(item.cartId)}
-                      style={{ color: item.note ? COLORS.caramelDark : COLORS.inkSoft }}
-                      className="flex items-center gap-1 text-xs mt-1.5"
-                    >
-                      <Pencil size={11} />
-                      {item.note ? item.note : "เพิ่มหมายเหตุ"}
-                    </button>
+                    <div className="flex items-center gap-3 mt-2">
+                      <button
+                        onClick={() => setNoteOpenFor(item.cartId)}
+                        style={{ color: item.note ? COLORS.caramelDark : COLORS.inkSoft }}
+                        className="flex items-center gap-1 text-xs flex-1 min-w-0"
+                      >
+                        <Pencil size={11} />
+                        <span className="truncate">{item.note ? item.note : "เพิ่มหมายเหตุ"}</span>
+                      </button>
+                      {item.addOns && item.addOns.length > 0 && (
+                        <button
+                          onClick={() => openEditCartItem(item)}
+                          style={{ color: COLORS.caramelDark }}
+                          className="text-xs font-semibold flex items-center gap-1 flex-shrink-0"
+                        >
+                          <Pencil size={11} /> แก้ไข
+                        </button>
+                      )}
+                      <button
+                        onClick={() => removeCartItem(item.cartId)}
+                        style={{ color: "#C0533F" }}
+                        className="text-xs font-semibold flex-shrink-0"
+                      >
+                        ลบ
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -1268,7 +1367,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod }) {
 }
 
 // ================= MENU MANAGER (staff) =================
-function MenuManagerView({ menu, setMenu }) {
+function MenuManagerView({ menu, setMenu, menuLoaded }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
   const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [] });
   const [newOptionName, setNewOptionName] = useState({}); // groupId -> ชื่อตัวเลือกที่กำลังพิมพ์
@@ -1411,7 +1510,12 @@ function MenuManagerView({ menu, setMenu }) {
         </button>
       </div>
 
-      {Object.entries(grouped).map(([cat, items]) => (
+      {!menuLoaded && (
+        <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
+          กำลังโหลดเมนู...
+        </div>
+      )}
+      {menuLoaded && Object.entries(grouped).map(([cat, items]) => (
         <div key={cat} className="mb-5">
           <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
             {CATEGORY_LABEL[cat] || cat}
@@ -1685,11 +1789,16 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: "เริ่มทำ" },
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: "เสร็จแล้ว" },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
+    delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
   };
 
   const sorted = [...orders].sort((a, b) => b.createdAt - a.createdAt);
-  const doneCount = orders.filter((o) => o.status === "done").length;
+  // ออร์เดอร์ที่เสร็จสิ้นจริง ๆ (จัดส่งแล้ว + รับที่ร้านที่ทำเสร็จแล้ว) — ใช้สำหรับปุ่มลบที่เสร็จแล้ว
+  // ออร์เดอร์จัดส่งที่แค่ "เสร็จแล้ว" ยังรออยู่ในคิวจัดส่ง จึงไม่นับรวม
+  const finishedCount = orders.filter(
+    (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup")
+  ).length;
   const cancelledCount = orders.filter((o) => o.status === "cancelled").length;
 
   return (
@@ -1708,13 +1817,13 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
               <Trash2 size={12} /> ลบที่ยกเลิก ({cancelledCount})
             </button>
           )}
-          {doneCount > 0 && (
+          {finishedCount > 0 && (
             <button
               onClick={() => setConfirmDeleteDone(true)}
               style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
               className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
             >
-              <Trash2 size={12} /> ลบที่เสร็จแล้ว ({doneCount})
+              <Trash2 size={12} /> ลบที่เสร็จแล้ว ({finishedCount})
             </button>
           )}
         </div>
@@ -1760,6 +1869,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
       <div className="space-y-3">
         {sorted.map((order) => {
           const meta = statusMeta[order.status];
+          // ออร์เดอร์จัดส่งที่ทำเสร็จแล้วกำลังรออยู่ในคิวจัดส่ง — ระบุให้พนักงานเห็นชัดเจน
+          const metaLabel =
+            order.status === "done" && order.method !== "pickup" ? "เสร็จแล้ว · รอจัดส่ง" : meta.label;
           const total = order.items.reduce((s, i) => s + i.price * i.qty, 0);
           return (
             <div
@@ -1812,8 +1924,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   >
                     {order.status === "preparing" && <Clock size={11} />}
                     {order.status === "done" && <Check size={11} />}
+                    {order.status === "delivered" && <Truck size={11} />}
                     {order.status === "cancelled" && <X size={11} />}
-                    {meta.label}
+                    {metaLabel}
                   </span>
                   {(order.status === "new" || order.status === "preparing") && (
                     <button
@@ -2040,13 +2153,16 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 // ให้พนักงานเห็นภาพรวมว่าแต่ละวันต้องจัดส่งกี่ออร์เดอร์ เวลาไหนบ้าง วางแผนออกรอบส่งได้ง่ายขึ้น
 function StaffDeliveryView({ orders, onAdvance }) {
   const statusMeta = {
-    new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: "เริ่มทำ" },
-    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: "เสร็จแล้ว" },
+    new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: null },
+    preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: null },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
+    delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
   };
 
-  const active = orders.filter((o) => o.status !== "cancelled");
+  // คิวจัดส่งแสดงเฉพาะออร์เดอร์ที่ทำเสร็จแล้ว (พร้อมจัดส่ง) กับที่จัดส่งเสร็จแล้วแล้ว
+  // ขั้นตอนใหม่: ออร์เดอร์เข้ามาที่หน้าออร์เดอร์ร้าน → กด "เสร็จแล้ว" → ถึงจะขึ้นมาที่นี่
+  const active = orders.filter((o) => o.status === "done" || o.status === "delivered");
 
   // ออร์เดอร์แบบรับที่ร้าน แยกไว้ต่างหาก — ไม่มีวันเวลาจัดส่ง
   const pickups = active.filter((o) => o.method === "pickup");
@@ -2156,13 +2272,13 @@ function StaffDeliveryView({ orders, onAdvance }) {
                       </p>
                       <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">บ้านเลขที่ {order.houseNo || "-"} · ฿{total}</p>
                     </div>
-                    {meta.action && (
+                    {order.status === "done" && (
                       <button
                         onClick={() => onAdvance(order.id)}
-                        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
-                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform"
+                        style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
                       >
-                        {meta.action}
+                        <Truck size={12} /> จัดส่งเสร็จแล้ว
                       </button>
                     )}
                   </div>
@@ -2195,12 +2311,23 @@ function StaffDeliveryView({ orders, onAdvance }) {
                     </p>
                     <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">บ้านเลขที่ {order.houseNo || "-"} · ฿{total}</p>
                   </div>
-                  <span
-                    style={{ background: meta.bg, color: meta.color }}
-                    className="text-xs font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
-                  >
-                    {meta.label}
-                  </span>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span
+                      style={{ background: meta.bg, color: meta.color }}
+                      className="text-xs font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
+                    >
+                      {meta.label}
+                    </span>
+                    {order.status === "done" && (
+                      <button
+                        onClick={() => onAdvance(order.id)}
+                        style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
+                      >
+                        <Truck size={12} /> จัดส่งเสร็จแล้ว
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -2387,7 +2514,10 @@ function StaffDashboardView({ orders }) {
 // ================= ROOT APP =================
 function App() {
   const [role, setRole] = useState("customer"); // customer | staff-menu | staff-orders
-  const [menu, setMenu] = useState(initialMenu);
+  // เมนูเริ่มต้นเป็น [] เมื่อเปิด sync — อย่าใช้ initialMenu (รูป stock จากลิงก์ Unsplash) ขึ้นก่อน
+  // เดิมตอนโหลดหน้าครั้งแรกจะเห็นรูปที่เป็นลิงก์สต็อก แทนรูปจริงที่ร้านอัปโหลด จนกว่า Firestore จะตอบกลับมา
+  const [menu, setMenu] = useState(FIREBASE_SYNC_ENABLED ? [] : initialMenu);
+  const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
   const [cart, setCart] = useState([]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
   const [orders, setOrders] = useState([]);
@@ -2431,6 +2561,7 @@ function App() {
       // no-op — if URL isn't accessible for some reason, just stay in customer mode
     }
   }, []);
+
 
   const handlePinSubmit = async (e) => {
     e.preventDefault();
@@ -2529,13 +2660,18 @@ function App() {
             setMenu(doc.data().items);
           } else {
             // เอกสารยังไม่เคยถูกสร้าง (ร้านเพิ่งเชื่อม Firebase ครั้งแรก) — เอาเมนูตั้งต้นไปตั้งเป็นค่าเริ่มต้นให้
+            setMenu(initialMenu);
             db.collection("config").doc("menu").set({ items: initialMenu }).catch((err) => {
               console.error("ตั้งค่าเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
             });
           }
+          setMenuLoaded(true);
         },
         (err) => {
           console.error("Firestore menu subscription failed:", err);
+          // อ่านเมนูไม่สำเร็จ (ยังไม่มีสิทธิ์ / เครือข่ายขัดข้อง) — ใช้เมนูตั้งต้นเป็นตัวสำรองให้แอปยังใช้งานได้
+          setMenu((prev) => (prev.length ? prev : initialMenu));
+          setMenuLoaded(true);
         }
       );
     return unsubscribe;
@@ -2638,15 +2774,19 @@ function App() {
   const advanceOrder = async (id) => {
     const order = orders.find((o) => o.id === id);
     if (!order) return;
-    const next = order.status === "new" ? "preparing" : order.status === "preparing" ? "done" : "done";
+    // ลำดับสถานะ: new → preparing → done (กดจากหน้าออร์เดอร์ร้าน) → delivered (กดจากหน้าคิวจัดส่ง)
+    // ออร์เดอร์แบบรับที่ร้านจะหยุดที่ done — ลูกค้ามารับเอง ไม่ต้องผ่านหน้าจัดส่ง
+    const next =
+      order.status === "new" ? "preparing" : order.status === "preparing" ? "done" : "delivered";
+    // อัปเดต state ท้องถิ่นทันที (optimistic) — UI ตอบสนองไว ไม่ต้องรอ Firestore รอบกลับ
+    // แล้วค่อยซิงก์ขึ้น Firestore ด้านหลัง (บนเครื่องที่มีสิทธิ์ อีกสักครู่ Firestore จะยืนยันสถานะเดียวกันอีกที)
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: next } : o)));
     if (FIREBASE_SYNC_ENABLED) {
       try {
         await db.collection("orders").doc(id).update({ status: next });
       } catch (err) {
         console.error("Failed to update order status:", err);
       }
-    } else {
-      setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: next } : o)));
     }
   };
 
@@ -2677,9 +2817,12 @@ function App() {
     }
   };
 
-  // ลบออร์เดอร์ที่สถานะ "เสร็จแล้ว" ทั้งหมดในครั้งเดียว — ใช้ล้างรายการเก่าเป็นระยะ
+  // ลบออร์เดอร์ที่เสร็จสิ้นจริง ๆ ทั้งหมดในครั้งเดียว — ใช้ล้างรายการเก่าเป็นระยะ
+  // นับเฉพาะ: จัดส่งเสร็จแล้ว (delivered) + รับที่ร้านที่ทำเสร็จแล้ว (done + pickup)
+  // ออร์เดอร์จัดส่งที่แค่ "เสร็จแล้ว" ยังรออยู่ในคิวจัดส่ง — จะยังไม่ถูกลบ
   const deleteDoneOrders = async () => {
-    const doneIds = orders.filter((o) => o.status === "done").map((o) => o.id);
+    const isFinished = (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup");
+    const doneIds = orders.filter(isFinished).map((o) => o.id);
     if (doneIds.length === 0) return;
     if (FIREBASE_SYNC_ENABLED) {
       try {
@@ -2690,7 +2833,7 @@ function App() {
         console.error("Failed to bulk-delete done orders:", err);
       }
     } else {
-      setOrders((prev) => prev.filter((o) => o.status !== "done"));
+      setOrders((prev) => prev.filter((o) => !isFinished(o)));
     }
   };
 
@@ -2844,6 +2987,7 @@ function App() {
             setCart={setCart}
             onCheckout={() => setCustomerStage("checkout")}
             shopOpen={shopOpen}
+            menuLoaded={menuLoaded}
           />
         )}
         {role === "customer" && customerStage === "checkout" && (
@@ -2876,7 +3020,7 @@ function App() {
           />
         )}
         {role === "staff-delivery" && <StaffDeliveryView orders={orders} onAdvance={advanceOrder} />}
-        {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} />}
+        {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} menuLoaded={menuLoaded} />}
         {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
       </div>
     </div>
