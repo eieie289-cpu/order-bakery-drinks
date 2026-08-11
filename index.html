@@ -239,9 +239,9 @@ const ensureUniqueAddOnIds = (groups) => {
 };
 
 // ---------- โปรโมชั่น (promotions) ----------
-// ประเภท: discount = ลดราคาเมนู | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด
-// โครงสร้าง: { id, name, type, active, discountPercent, itemIds ([] = ทุกเมนู), addOnIds, code }
-const PROMO_TYPE_LABEL = { discount: "ลดราคาเมนู", freeAddOn: "ท็อปปิ้งฟรี", code: "โค้ดส่วนลด" };
+// ประเภท: discount = ลดราคาเมนู (เป็น % หรือบาท) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด (เป็น % หรือบาท) | byoc = นำแก้วมาเอง (ลดเป็นบาท) | threshold = ซื้อครบตามยอดแล้วลด (อัตโนมัติ)
+// โครงสร้าง: { id, name, type, active, discountPercent, discountBaht, minSpend, itemIds ([] = ทุกเมนู), addOnIds, code }
+const PROMO_TYPE_LABEL = { discount: "ลดราคาเมนู", freeAddOn: "ท็อปปิ้งฟรี", code: "โค้ดส่วนลด", byoc: "เอาแก้วมาเอง", threshold: "ซื้อครบลด" };
 
 // % ลดสูงสุดของเมนูนี้จากโปรโมชั่นลดราคาที่เปิดใช้ (ตรงกับเมนู หรือเป็น "ทุกเมนู")
 const discountPercentFor = (itemId, promos) =>
@@ -253,10 +253,36 @@ const discountPercentFor = (itemId, promos) =>
     )
     .map((p) => Number(p.discountPercent) || 0));
 
-// ราคาเมนูหลังหักส่วนลด (ปัดเป็นสตางค์)
+// ส่วนลดเป็นบาทสูงสุดของเมนูนี้ (โปรโมชั่น "ลดราคาเมนู" แบบระบุบาท เช่น ลด 5 บาท)
+const discountBahtFor = (itemId, promos) =>
+  Math.max(0, ...(promos || [])
+    .filter(
+      (p) =>
+        p && p.active && p.type === "discount" &&
+        (!p.itemIds || p.itemIds.length === 0 || p.itemIds.includes(itemId))
+    )
+    .map((p) => Number(p.discountBaht) || 0));
+
+// ราคาเมนูหลังหักส่วนลด (หัก % ก่อน แล้วค่อยหักบาท — ปัดเป็นสตางค์)
 const effectiveItemPrice = (item, promos) => {
-  const pct = discountPercentFor(item && item.id, promos);
-  return pct > 0 ? Math.round(item.price * (100 - pct)) / 100 : item.price;
+  if (!item) return 0;
+  const pct = discountPercentFor(item.id, promos);
+  const baht = discountBahtFor(item.id, promos);
+  let price = item.price;
+  if (pct > 0) price = Math.round(price * (100 - pct)) / 100;
+  if (baht > 0) price = Math.max(0, Math.round((price - baht) * 100) / 100);
+  return price;
+};
+
+// ป้ายส่วนลดบนการ์ดเมนู เช่น "-10%" หรือ "-฿5" (ถ้ามีทั้งสองอย่างแสดงรวมกัน)
+const discountLabelFor = (item, promos) => {
+  if (!item) return "";
+  const pct = discountPercentFor(item.id, promos);
+  const baht = discountBahtFor(item.id, promos);
+  if (pct > 0 && baht > 0) return `-${pct}% -฿${baht}`;
+  if (pct > 0) return `-${pct}%`;
+  if (baht > 0) return `-฿${baht}`;
+  return "";
 };
 
 // ตัวเลือกเพิ่มนี้ฟรีไหม (โปรโมชั่นท็อปปิ้งฟรีที่เปิดใช้ + ตรงกับเมนู)
@@ -618,6 +644,11 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   const cartCount = cart.reduce((sum, c) => sum + c.qty, 0);
+  // โปรโมชั่น "ซื้อครบ" — คำนวณอัตโนมัติจากยอดรวมตะกร้า (ลูกค้าไม่ต้องทำอะไร)
+  const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
+  const thresholdMet = !!thresholdPromo && total >= (Number(thresholdPromo.minSpend) || 0);
+  const thresholdBaht = thresholdMet ? Math.min(Number(thresholdPromo.discountBaht) || 0, total) : 0;
+  const displayTotal = total - thresholdBaht;
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="relative">
@@ -762,7 +793,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                     )}
                     {hasDiscount && (
                       <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
-                        -{discountPercentFor(item.id, promos)}%
+                        {discountLabelFor(item, promos)}
                       </span>
                     )}
                   </span>
@@ -941,7 +972,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             </div>
             <span className="text-sm font-medium">ดูตะกร้า</span>
           </div>
-          <span className="text-white font-bold">฿{total}</span>
+          <span className="text-white font-bold">฿{displayTotal}</span>
         </button>
       )}
 
@@ -1040,9 +1071,20 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
               ))}
             </div>
             <div style={{ borderTop: `1px solid ${COLORS.line}` }} className="px-5 py-4">
+              {thresholdPromo &&
+                (thresholdMet ? (
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลด ซื้อครบ ฿{thresholdPromo.minSpend}</span>
+                    <span style={{ color: COLORS.sage }} className="font-semibold">-฿{thresholdBaht}</span>
+                  </div>
+                ) : (
+                  <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-semibold mb-1.5">
+                    ซื้อเพิ่มอีก ฿{Math.max(0, (Number(thresholdPromo.minSpend) || 0) - total)} รับส่วนลด ฿{Number(thresholdPromo.discountBaht) || 0}
+                  </p>
+                ))}
               <div className="flex items-center justify-between mb-3">
                 <span style={{ color: COLORS.inkSoft }} className="text-sm">ยอดรวม</span>
-                <span style={{ color: COLORS.ink }} className="text-lg font-bold">฿{total}</span>
+                <span style={{ color: COLORS.ink }} className="text-lg font-bold">฿{displayTotal}</span>
               </div>
               <PrimaryButton
                 full
@@ -1062,7 +1104,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
+function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
@@ -1076,33 +1118,71 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
   const [custError, setCustError] = useState(false);
   const custFormRef = useRef(null);
   const dateOptions = useMemo(() => upcomingDateOptions(7), []);
-  // โค้ดส่วนลด — ลด % จากยอดรวมสินค้า (เฉพาะโค้ดที่พนักงานสร้างไว้ในหน้าโปรโมชั่น)
+  // โค้ดส่วนลด — ลด % หรือบาทจากยอดรวมสินค้า (เฉพาะโค้ดที่พนักงานสร้างไว้ในหน้าโปรโมชั่น)
   const [promoCode, setPromoCode] = useState("");
   const [appliedPromo, setAppliedPromo] = useState(null);
-  const [promoError, setPromoError] = useState(false);
+  const [promoError, setPromoError] = useState(""); // ข้อความ error ของโค้ดส่วนลด ("" = ไม่มี) — เช่น ใช้ครบแล้ว / 1 ครั้งต่อคน
+  const [bringCup, setBringCup] = useState(false); // ลูกค้าติ๊ก "นำแก้วมาเอง" เพื่อรับส่วนลด
   const subtotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
-  const discountBaht = appliedPromo
-    ? Math.round((subtotal * (Number(appliedPromo.discountPercent) || 0)) / 100)
+  // โปรโมชั่น "นำแก้วมาเอง" ที่เปิดใช้ — ลูกค้าติ๊กในหน้าชำระเงินเพื่อรับส่วนลด
+  const byocPromo = (promos || []).find((p) => p && p.active && p.type === "byoc");
+  // ส่วนลดโค้ด (เป็น % หรือบาทก็ได้) + ส่วนลดนำแก้วมาเอง
+  const codeBaht = appliedPromo
+    ? Number(appliedPromo.discountBaht) > 0
+      ? Math.min(Number(appliedPromo.discountBaht), subtotal)
+      : Math.round((subtotal * (Number(appliedPromo.discountPercent) || 0)) / 100)
     : 0;
+  const byocBaht = bringCup && byocPromo ? Math.min(Number(byocPromo.discountBaht) || 0, subtotal) : 0;
+  // โปรโมชั่น "ซื้อครบ" — หักให้อัตโนมัติเมื่อยอดรวมถึงเกณฑ์ (ลูกค้าไม่ต้องทำอะไร)
+  const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
+  const thresholdMet = !!thresholdPromo && subtotal >= (Number(thresholdPromo.minSpend) || 0);
+  const thresholdBaht = thresholdMet ? Math.min(Number(thresholdPromo.discountBaht) || 0, subtotal) : 0;
+  const discountBaht = codeBaht + byocBaht + thresholdBaht;
   const total = Math.max(0, subtotal - discountBaht);
+  // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5"
+  const discountSummaryLabel = [
+    thresholdBaht > 0 ? "ซื้อครบ" : null,
+    byocBaht > 0 ? "นำแก้วมาเอง" : null,
+    appliedPromo ? `โค้ด ${appliedPromo.code}` : null,
+  ]
+    .filter(Boolean)
+    .join(" + ");
   const isCash = method === "cash";
 
   const applyPromoCode = () => {
     const promo = findPromoCode(promoCode, promos);
-    if (promo) {
-      setAppliedPromo(promo);
-      setPromoError(false);
-    } else {
+    if (!promo) {
       setAppliedPromo(null);
-      setPromoError(true);
+      setPromoError("โค้ดส่วนลดไม่ถูกต้อง หรือยังไม่ได้เปิดใช้");
+      return;
     }
+    // จำกัดจำนวนครั้งที่ใช้ได้ทั้งหมด (เช่น ใช้ได้ 50 ครั้ง)
+    if (Number(promo.maxUses) > 0 && (Number(promo.uses) || 0) >= Number(promo.maxUses)) {
+      setAppliedPromo(null);
+      setPromoError("โค้ดนี้ใช้ครบจำนวนครั้งแล้ว");
+      return;
+    }
+    // จำกัด 1 ครั้งต่อลูกค้า (เช่น โค้ดเพื่อนแนะนำ)
+    if (promo.perCustomer && (promo.usedBy || []).includes(uid)) {
+      setAppliedPromo(null);
+      setPromoError("โค้ดนี้ใช้ได้คนละ 1 ครั้งเท่านั้น");
+      return;
+    }
+    setAppliedPromo(promo);
+    setPromoError("");
   };
 
   // ข้อมูลส่วนลดที่จะแนบไปกับออร์เดอร์ (ส่งให้พนักงานเห็นยอดที่หักจริง)
-  const getDiscount = () =>
-    appliedPromo && discountBaht > 0
-      ? { code: appliedPromo.code, percent: Number(appliedPromo.discountPercent) || 0, baht: discountBaht }
-      : null;
+  const getDiscount = () => {
+    if (discountBaht <= 0) return null;
+    return {
+      code: appliedPromo ? appliedPromo.code : "",
+      percent: appliedPromo ? Number(appliedPromo.discountPercent) || 0 : 0,
+      baht: discountBaht,
+      label: discountSummaryLabel,
+      promoId: appliedPromo ? appliedPromo.id : "", // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
+    };
+  };
 
   // แค่เก็บรูปสลิปไว้ให้พนักงานเปิดดูเอง — ไม่มีการอ่าน/ตรวจสอบอัตโนมัติใด ๆ
   // รูปจะถูกบีบอัดแล้วฝังลง Firestore โดยตรง (ไม่ผ่าน Firebase Storage เพราะ Storage
@@ -1197,13 +1277,33 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
           </div>
         ))}
         <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-3 mt-2">
+          {/* นำแก้วมาเอง — ลูกค้าติ๊กเพื่อรับส่วนลด (เฉพาะเมื่อร้านเปิดใช้โปรโมชั่นนี้) */}
+          {byocPromo && (
+            <button
+              type="button"
+              onClick={() => setBringCup(!bringCup)}
+              className="w-full flex items-center justify-between rounded-xl px-3 py-2.5 mb-2"
+              style={{ border: `1px solid ${bringCup ? COLORS.sage : COLORS.line}`, background: bringCup ? COLORS.sageSoft : "#FFFFFF" }}
+            >
+              <span className="flex items-center gap-2">
+                <span
+                  style={{ border: `2px solid ${bringCup ? COLORS.sage : COLORS.line}`, background: bringCup ? COLORS.sage : "transparent" }}
+                  className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                >
+                  {bringCup && <Check size={10} color="#fff" />}
+                </span>
+                <span style={{ color: COLORS.ink }} className="text-sm font-medium">{byocPromo.name || "นำแก้วมาเอง"}</span>
+              </span>
+              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocPromo.discountBaht}</span>
+            </button>
+          )}
           {/* โค้ดส่วนลด */}
           <div className="flex gap-2 mb-2">
             <input
               value={promoCode}
               onChange={(e) => {
                 setPromoCode(e.target.value.toUpperCase());
-                setPromoError(false);
+                setPromoError("");
               }}
               placeholder="ใส่โค้ดส่วนลด (ถ้ามี)"
               style={{
@@ -1215,7 +1315,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
             />
             <button
               type="button"
-              onClick={appliedPromo ? () => { setAppliedPromo(null); setPromoCode(""); setPromoError(false); } : applyPromoCode}
+              onClick={appliedPromo ? () => { setAppliedPromo(null); setPromoCode(""); setPromoError(""); } : applyPromoCode}
               style={{
                 background: appliedPromo ? COLORS.sageSoft : COLORS.caramel,
                 color: appliedPromo ? COLORS.sage : "#FFF9F0",
@@ -1227,19 +1327,25 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
           </div>
           {promoError && (
             <p style={{ color: "#C0533F" }} className="text-[11px] font-semibold mb-1">
-              โค้ดส่วนลดไม่ถูกต้อง หรือยังไม่ได้เปิดใช้
+              {promoError}
             </p>
           )}
           {appliedPromo && (
             <p style={{ color: COLORS.sage }} className="text-[11px] font-semibold mb-1">
-              โค้ด {appliedPromo.code} · ลด {Number(appliedPromo.discountPercent) || 0}% จากยอดรวม
+              โค้ด {appliedPromo.code} · ลด{" "}
+              {Number(appliedPromo.discountBaht) > 0 ? `฿${appliedPromo.discountBaht}` : `${Number(appliedPromo.discountPercent) || 0}%`} จากยอดรวม
             </p>
           )}
-          {appliedPromo && discountBaht > 0 && (
+          {discountBaht > 0 && (
             <div className="flex justify-between text-xs mb-1">
-              <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลดโค้ด {appliedPromo.code}</span>
+              <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลด {discountSummaryLabel}</span>
               <span style={{ color: COLORS.sage }} className="font-semibold">-฿{discountBaht}</span>
             </div>
+          )}
+          {thresholdPromo && !thresholdMet && (
+            <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-semibold mb-1">
+              ซื้อเพิ่มอีก ฿{Math.max(0, (Number(thresholdPromo.minSpend) || 0) - subtotal)} รับส่วนลด ฿{Number(thresholdPromo.discountBaht) || 0}
+            </p>
           )}
           <div className="flex justify-between pt-2">
             <span style={{ color: COLORS.ink }} className="font-semibold">ยอดรวมทั้งหมด</span>
@@ -1622,7 +1728,8 @@ function drawOrderReceipt(order) {
   y += 32;
 
   if (discount > 0) {
-    text("ส่วนลดโค้ด", M, y, 14, 500, "#6B5642");
+    const discountLabel = (order && order.discount && order.discount.label) || "ส่วนลดโค้ด";
+    text(discountLabel, M, y, 14, 500, "#6B5642");
     text(`-฿${discount}`, W - M, y, 14, 600, "#6B5642", "right");
     y += 24;
   }
@@ -2357,7 +2464,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
               <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-2.5 mt-1">
                 {order.discount && Number(order.discount.baht) > 0 && (
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลดโค้ด {order.discount.code || ""}</span>
+                    <span style={{ color: COLORS.sage }} className="font-semibold">
+                      ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))}
+                    </span>
                     <span style={{ color: COLORS.sage }} className="font-semibold">-฿{order.discount.baht}</span>
                   </div>
                 )}
@@ -2831,25 +2940,29 @@ function StaffDeliveryView({ orders, onAdvance }) {
 // และตัวเลือกเสริม (เช่น แยกน้ำแข็ง/เพิ่มท็อปปิ้ง) ถูกเลือกกี่ครั้ง
 // นับจาก "ออร์เดอร์ที่เข้ามา" ทั้งหมดในช่วงเวลาที่เลือก (ทุกสถานะ ไม่ว่าจะใหม่/กำลังทำ/เสร็จแล้ว)
 // ================= STAFF: จัดการโปรโมชั่น =================
-// ประเภท: discount = ลดราคาเมนู (ตามเมนูที่เลือก หรือทุกเมนู) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด
-// โครงสร้าง: { id, name, type, active, discountPercent, itemIds ([] = ทุกเมนู), addOnIds, code }
+// ประเภท: discount = ลดราคาเมนู (เป็น % หรือบาท) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด (เป็น % หรือบาท) | byoc = นำแก้วมาเอง (ลดเป็นบาท) | threshold = ซื้อครบลด (อัตโนมัติ)
+// โครงสร้าง: { id, name, type, active, discountPercent, discountBaht, minSpend, itemIds ([] = ทุกเมนู), addOnIds, code, maxUses (0 = ไม่จำกัด), perCustomer, uses, usedBy }
 function StaffPromoView({ promos, updatePromos, menu }) {
   const [editing, setEditing] = useState(null); // id ของโปรโมชั่นที่กำลังแก้ หรือ "new"
   const [confirmDelete, setConfirmDelete] = useState(null); // id ที่รอยืนยันลบ
   const [form, setForm] = useState({
     name: "",
-    type: "discount", // discount | freeAddOn | code
+    type: "discount", // discount | freeAddOn | code | byoc | threshold
     active: true,
-    discountPercent: "",
+    discountMode: "percent", // percent = ลดเป็น % | baht = ลดเป็นบาท
+    discountAmount: "",
+    minSpend: "",
     itemIds: [],
     addOnIds: [],
     code: "",
+    maxUses: "",
+    perCustomer: false,
   });
 
   const startNew = () => {
     setEditing("new");
     setConfirmDelete(null);
-    setForm({ name: "", type: "discount", active: true, discountPercent: "", itemIds: [], addOnIds: [], code: "" });
+    setForm({ name: "", type: "discount", active: true, discountMode: "percent", discountAmount: "", minSpend: "", itemIds: [], addOnIds: [], code: "", maxUses: "", perCustomer: false });
   };
 
   const startEdit = (p) => {
@@ -2859,11 +2972,16 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       name: p.name || "",
       type: p.type || "discount",
       active: p.active !== false,
-      discountPercent: String(p.discountPercent || ""),
+      // ข้อมูลเก่าที่มีแต่ discountPercent จะเข้าโหมด % อัตโนมัติ ส่วนแบบระบุบาทเข้าโหมดบาท
+      discountMode: Number(p.discountBaht) > 0 ? "baht" : "percent",
+      discountAmount: String(Number(p.discountBaht) > 0 ? p.discountBaht : p.discountPercent || ""),
+      minSpend: String(p.minSpend || ""),
       // กัน itemIds ที่เมนูถูกลบไปแล้วค้างอยู่
       itemIds: (p.itemIds || []).filter((id) => menu.some((m) => m.id === id)),
       addOnIds: p.addOnIds || [],
       code: p.code || "",
+      maxUses: String(Number(p.maxUses) > 0 ? p.maxUses : ""),
+      perCustomer: !!p.perCustomer,
     });
   };
 
@@ -2872,17 +2990,28 @@ function StaffPromoView({ promos, updatePromos, menu }) {
   const save = () => {
     if (!form.name.trim()) return;
     if (form.type === "code" && !form.code.trim()) return;
-    const percent = Number(form.discountPercent);
+    const amount = Number(form.discountAmount);
+    const hasAmount = Number.isFinite(amount) && amount > 0;
+    // ประเภทที่ต้องระบุจำนวนส่วนลด (ลดราคาเมนู / โค้ด / นำแก้วมาเอง / ซื้อครบลด) ถ้ายังไม่ได้กรอก จะไม่บันทึก
+    if (["discount", "code", "byoc"].includes(form.type) && !hasAmount) return;
+    if (form.type === "threshold" && (!hasAmount || !(Number(form.minSpend) > 0))) return;
+    const isBahtMode = form.discountMode === "baht" || form.type === "byoc" || form.type === "threshold";
+    const existing = promos.find((p) => p.id === editing); // ข้อมูลเดิม (ถ้าแก้) — เก็บจำนวนการใช้โค้ดไว้ไม่ให้หาย
     const promo = {
       id: editing === "new" ? nextId() : editing,
       name: form.name.trim(),
       type: form.type,
       active: form.active,
-      discountPercent:
-        (form.type === "discount" || form.type === "code") && Number.isFinite(percent) && percent > 0 ? percent : 0,
-      itemIds: form.type === "code" ? [] : form.itemIds,
+      discountPercent: hasAmount && !isBahtMode ? amount : 0,
+      discountBaht: hasAmount && (isBahtMode || form.type === "threshold") ? amount : 0,
+      minSpend: form.type === "threshold" && Number(form.minSpend) > 0 ? Number(form.minSpend) : 0,
+      itemIds: form.type === "code" || form.type === "byoc" || form.type === "threshold" ? [] : form.itemIds,
       addOnIds: form.type === "freeAddOn" ? form.addOnIds : [],
       code: form.type === "code" ? form.code.trim().toUpperCase() : "",
+      maxUses: form.type === "code" ? Math.max(0, Math.floor(Number(form.maxUses) || 0)) : 0,
+      perCustomer: form.type === "code" ? !!form.perCustomer : false,
+      uses: existing && Number(existing.uses) > 0 ? Number(existing.uses) : 0,
+      usedBy: existing && Array.isArray(existing.usedBy) ? existing.usedBy : [],
     };
     updatePromos((prev) => (editing === "new" ? [...prev, promo] : prev.map((p) => (p.id === editing ? promo : p))));
     setEditing(null);
@@ -2912,15 +3041,28 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     return out;
   }, [menu, form.itemIds]);
 
+  const discountText = (p) => (Number(p.discountBaht) > 0 ? `฿${p.discountBaht}` : `${p.discountPercent}%`);
+
   // สรุปเงื่อนไขของโปรโมชั่นสำหรับแสดงในการ์ด
   const describe = (p) => {
     const target = !p.itemIds || p.itemIds.length === 0 ? "ทุกเมนู" : `เฉพาะ ${p.itemIds.length} เมนู`;
-    if (p.type === "discount") return `ลด ${p.discountPercent}% · ${target}`;
-    if (p.type === "code") return `โค้ด “${p.code}” · ลด ${p.discountPercent}% จากยอดรวม`;
+    if (p.type === "discount") return `ลด ${discountText(p)} · ${target}`;
+    if (p.type === "code") return `โค้ด “${p.code}” · ลด ${discountText(p)} จากยอดรวม`;
+    if (p.type === "byoc") return `นำแก้วมาเอง · ลด ${discountText(p)} จากยอดรวม`;
+    if (p.type === "threshold") return `ซื้อครบ ฿${p.minSpend} ลด ${discountText(p)} (อัตโนมัติ)`;
     return `ตัวเลือกฟรี ${(p.addOnIds || []).length} รายการ · ${target}`;
   };
 
-  const typeColor = (t) => (t === "discount" ? COLORS.caramelDark : t === "freeAddOn" ? COLORS.sage : "#8A5A44");
+  const typeColor = (t) =>
+    t === "discount"
+      ? COLORS.caramelDark
+      : t === "freeAddOn"
+        ? COLORS.sage
+        : t === "code"
+          ? "#8A5A44"
+          : t === "byoc"
+            ? "#5B7A8C"
+            : "#B5652E";
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
@@ -2937,7 +3079,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
         </button>
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-        ลดราคาเมนู · ท็อปปิ้งฟรี · โค้ดส่วนลด — ลูกค้าเห็นผลทันทีทุกเครื่อง
+        ลดราคาเมนู (เป็น % หรือบาท) · ท็อปปิ้งฟรี · โค้ดส่วนลด · นำแก้วมาเอง · ซื้อครบลด — ลูกค้าเห็นผลทันทีทุกเครื่อง
       </p>
 
       {promos.length === 0 && (
@@ -2965,6 +3107,15 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             </div>
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{p.name}</p>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">{describe(p)}</p>
+            {p.type === "code" && (Number(p.maxUses) > 0 || p.perCustomer) && (
+              <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-medium mt-0.5">
+                {Number(p.maxUses) > 0
+                  ? `ใช้แล้ว ${Number(p.uses) || 0}/${p.maxUses} ครั้ง · เหลือ ${Math.max(0, Number(p.maxUses) - (Number(p.uses) || 0))} ครั้ง`
+                  : ""}
+                {Number(p.maxUses) > 0 && p.perCustomer ? " · " : ""}
+                {p.perCustomer ? "1 ครั้งต่อลูกค้า" : ""}
+              </p>
+            )}
             <div className="flex items-center justify-end gap-3 mt-2 pt-2" style={{ borderTop: `1px solid ${COLORS.line}` }}>
               <button onClick={() => startEdit(p)} style={{ color: COLORS.inkSoft }} className="text-xs font-semibold flex items-center gap-1">
                 <Pencil size={13} /> แก้ไข
@@ -3034,21 +3185,23 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 
               <div>
                 <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ประเภท</label>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {[
                     { key: "discount", label: "ลดราคาเมนู" },
                     { key: "freeAddOn", label: "ท็อปปิ้งฟรี" },
                     { key: "code", label: "โค้ดส่วนลด" },
+                    { key: "byoc", label: "นำแก้วมาเอง" },
+                    { key: "threshold", label: "ซื้อครบลด" },
                   ].map((t) => (
                     <button
                       key={t.key}
-                      onClick={() => setForm((f) => ({ ...f, type: t.key }))}
+                      onClick={() => setForm((f) => ({ ...f, type: t.key, discountMode: t.key === "byoc" ? "baht" : f.discountMode }))}
                       style={{
                         background: form.type === t.key ? COLORS.caramel : "#FFFFFF",
                         color: form.type === t.key ? "#FFF9F0" : COLORS.inkSoft,
                         border: `1px solid ${form.type === t.key ? COLORS.caramel : COLORS.line}`,
                       }}
-                      className="flex-1 px-2 py-2 rounded-xl text-xs font-medium leading-tight"
+                      className="w-full px-1 py-2 rounded-xl text-[11px] font-medium leading-tight"
                     >
                       {t.label}
                     </button>
@@ -3056,38 +3209,130 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                 </div>
               </div>
 
-              {(form.type === "discount" || form.type === "code") && (
+              {form.type === "threshold" && (
+                <div className="space-y-2">
+                  <div>
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ยอดซื้อขั้นต่ำ (บาท)</label>
+                    <input
+                      value={form.minSpend}
+                      onChange={(e) => setForm((f) => ({ ...f, minSpend: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder="เช่น 200"
+                      inputMode="numeric"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จำนวนเงินที่ลด (บาท)</label>
+                    <input
+                      value={form.discountAmount}
+                      onChange={(e) => setForm((f) => ({ ...f, discountAmount: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder="เช่น 20"
+                      inputMode="numeric"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                    />
+                  </div>
+                  <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                    ลูกค้าซื้อครบตามยอดขั้นต่ำในตะกร้า แล้วหักส่วนลดให้อัตโนมัติ ไม่ต้องกรอกอะไร
+                  </p>
+                </div>
+              )}
+              {(form.type === "discount" || form.type === "code" || form.type === "byoc") && (
                 <div>
-                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
-                    % ลด (เช่น 10 = ลด 10%)
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">
+                    จำนวนส่วนลด
                   </label>
+                  {form.type !== "byoc" && (
+                    <div className="flex gap-1.5 mb-1.5">
+                      {[
+                        { key: "percent", label: "เป็น %" },
+                        { key: "baht", label: "เป็นบาท (฿)" },
+                      ].map((m) => (
+                        <button
+                          key={m.key}
+                          type="button"
+                          onClick={() => setForm((f) => ({ ...f, discountMode: m.key }))}
+                          style={{
+                            background: form.discountMode === m.key ? COLORS.caramel : "#FFFFFF",
+                            color: form.discountMode === m.key ? "#FFF9F0" : COLORS.inkSoft,
+                            border: `1px solid ${form.discountMode === m.key ? COLORS.caramel : COLORS.line}`,
+                          }}
+                          className="flex-1 px-3 py-2 rounded-xl text-xs font-medium"
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <input
-                    value={form.discountPercent}
-                    onChange={(e) => setForm((f) => ({ ...f, discountPercent: e.target.value.replace(/[^0-9]/g, "") }))}
-                    placeholder="10"
+                    value={form.discountAmount}
+                    onChange={(e) => setForm((f) => ({ ...f, discountAmount: e.target.value.replace(/[^0-9]/g, "") }))}
+                    placeholder={form.discountMode === "baht" || form.type === "byoc" ? "เช่น 5" : "เช่น 10"}
                     inputMode="numeric"
                     style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                     className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
                   />
+                  <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
+                    {form.type === "byoc"
+                      ? "ลูกค้าติ๊ก \"นำแก้วมาเอง\" ที่หน้าชำระเงิน แล้วหักจำนวนนี้จากยอดรวม"
+                      : form.discountMode === "baht"
+                        ? "เช่น 5 = ลด 5 บาท"
+                        : "เช่น 10 = ลด 10%"}
+                  </p>
                 </div>
               )}
 
               {form.type === "code" && (
-                <div>
-                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
-                    โค้ดส่วนลด (ลูกค้ากรอกที่หน้าชำระเงิน)
-                  </label>
-                  <input
-                    value={form.code}
-                    onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
-                    placeholder="เช่น SAVE10"
-                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none uppercase"
-                  />
+                <div className="space-y-2.5">
+                  <div>
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
+                      โค้ดส่วนลด (ลูกค้ากรอกที่หน้าชำระเงิน)
+                    </label>
+                    <input
+                      value={form.code}
+                      onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
+                      placeholder="เช่น SAVE10"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none uppercase"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
+                      จำกัดจำนวนครั้งที่ใช้ได้ทั้งหมด (เว้นว่าง = ไม่จำกัด)
+                    </label>
+                    <input
+                      value={form.maxUses}
+                      onChange={(e) => setForm((f) => ({ ...f, maxUses: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder="เช่น 50"
+                      inputMode="numeric"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, perCustomer: !f.perCustomer }))}
+                    style={{
+                      background: form.perCustomer ? COLORS.sageSoft : "#FFFFFF",
+                      border: `1px solid ${form.perCustomer ? COLORS.sage : COLORS.line}`,
+                    }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium flex items-center justify-between gap-2"
+                  >
+                    <span style={{ color: form.perCustomer ? COLORS.sage : COLORS.inkSoft }}>
+                      ใช้ได้ 1 ครั้งต่อลูกค้า (โค้ดเพื่อนแนะนำ)
+                    </span>
+                    <Chip tone={form.perCustomer ? "sage" : "caramel"}>{form.perCustomer ? "เปิด" : "ปิด"}</Chip>
+                  </button>
+                  <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                    {form.perCustomer
+                      ? "ลูกค้าแต่ละคนใช้โค้ดนี้ได้แค่ครั้งเดียว แม้สั่งหลายรอบ"
+                      : "จำกัดจำนวนครั้งรวม: ลูกค้าคนเดียวกันสั่งหลายรอบก็นับทีละครั้ง"}
+                  </p>
                 </div>
               )}
 
-              {form.type !== "code" && (
+              {form.type !== "code" && form.type !== "byoc" && form.type !== "threshold" && (
                 <div>
                   <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ใช้กับเมนูไหน</label>
                   <div className="flex flex-wrap gap-1.5">
@@ -3170,11 +3415,22 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 
               <button
                 onClick={save}
-                disabled={!form.name.trim() || (form.type === "code" && !form.code.trim())}
+                disabled={
+                  !form.name.trim() ||
+                  (form.type === "code" && !form.code.trim()) ||
+                  (["discount", "code", "byoc"].includes(form.type) && !(Number(form.discountAmount) > 0)) ||
+                  (form.type === "threshold" && (!(Number(form.minSpend) > 0) || !(Number(form.discountAmount) > 0)))
+                }
                 style={{
                   background: COLORS.ink,
                   color: "#FFF9F0",
-                  opacity: !form.name.trim() || (form.type === "code" && !form.code.trim()) ? 0.4 : 1,
+                  opacity:
+                    !form.name.trim() ||
+                    (form.type === "code" && !form.code.trim()) ||
+                    (["discount", "code", "byoc"].includes(form.type) && !(Number(form.discountAmount) > 0)) ||
+                    (form.type === "threshold" && (!(Number(form.minSpend) > 0) || !(Number(form.discountAmount) > 0)))
+                      ? 0.4
+                      : 1,
                 }}
                 className="w-full py-3 rounded-2xl text-sm font-bold mt-1"
               >
@@ -3191,16 +3447,19 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 // ================= STAFF: จัดการสิทธิ์พนักงาน =================
 // เฉพาะเครื่องที่ได้รับสิทธิ์แล้วเท่านั้นที่เข้าได้ — เพิ่ม/ลบสิทธิ์เครื่องพนักงานได้ที่นี่
 // (rules บังคับว่าเขียน/อ่านรายชื่อได้เฉพาะคนที่อยู่ใน staffUids อยู่แล้ว)
-function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
+function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
   const [newUid, setNewUid] = useState("");
+  const [newName, setNewName] = useState("");
   const [formError, setFormError] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(null);
+  const [renameFor, setRenameFor] = useState(null); // uid ของเครื่องที่กำลังตั้งชื่อ
+  const [renameValue, setRenameValue] = useState("");
   const [uidCopied, setUidCopied] = useState(false);
 
   const add = () => {
     const v = newUid.trim();
     if (!v) return;
-    if (staffMembers.includes(v)) {
+    if (staffMembers.some((m) => m.uid === v)) {
       setFormError("เครื่องนี้ได้รับสิทธิ์อยู่แล้ว");
       return;
     }
@@ -3209,8 +3468,9 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
       setFormError("รหัสอุปกรณ์ไม่ถูกต้อง — ให้คัดลอกจากจอ \"เครื่องนี้ยังไม่ได้รับสิทธิ์\" ของเครื่องนั้นมาตรง ๆ");
       return;
     }
-    onAdd(v);
+    onAdd(v, newName.trim());
     setNewUid("");
+    setNewName("");
     setFormError("");
   };
 
@@ -3228,6 +3488,17 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
     } catch (err) {
       console.error("Copy uid failed:", err);
     }
+  };
+
+  const startRename = (m) => {
+    setRenameFor(m.uid);
+    setRenameValue(m.name || "");
+  };
+
+  const saveRename = () => {
+    if (!renameFor) return;
+    onRename(renameFor, renameValue.trim());
+    setRenameFor(null);
   };
 
   // ลบได้เฉพาะเครื่องอื่น และต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออกทั้งร้าน)
@@ -3273,20 +3544,27 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
           ให้เครื่องนั้นเปิดลิงก์พนักงาน (?staff=1) → ใส่ PIN → หน้า "เครื่องนี้ยังไม่ได้รับสิทธิ์" จะโชว์รหัสอุปกรณ์
           → คัดลอกมาวางตรงนี้ แล้วกดเพิ่มสิทธิ์ (ทำครั้งเดียวต่อเครื่อง)
         </p>
-        <div className="flex gap-2 items-stretch">
+        <div className="space-y-2">
           <input
             value={newUid}
             onChange={(e) => { setNewUid(e.target.value); setFormError(""); }}
             placeholder="วางรหัสอุปกรณ์ที่นี่"
             style={{ border: `1px solid ${formError ? "#C0533F" : COLORS.line}`, color: COLORS.ink }}
-            className="flex-1 min-w-0 rounded-xl px-3.5 py-2.5 text-xs font-mono bg-white outline-none"
+            className="w-full rounded-xl px-3.5 py-2.5 text-xs font-mono bg-white outline-none"
+          />
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="ชื่อ/ตำแหน่ง เช่น พนักงาน 1, พี่บี (ไม่กรอกก็ได้)"
+            style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            className="w-full rounded-xl px-3.5 py-2.5 text-xs bg-white outline-none"
           />
           <button
             type="button"
             onClick={add}
             disabled={!newUid.trim()}
             style={{ background: COLORS.caramel, color: "#FFF9F0", opacity: newUid.trim() ? 1 : 0.4 }}
-            className="rounded-xl px-4 text-xs font-semibold flex-shrink-0"
+            className="w-full rounded-xl py-2.5 text-xs font-semibold"
           >
             เพิ่มสิทธิ์
           </button>
@@ -3304,20 +3582,50 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
             กำลังโหลดรายชื่อ... (ถ้าไม่ขึ้น ให้ตรวจว่าเครื่องนี้ถูกเพิ่มสิทธิ์ใน Firebase แล้ว)
           </p>
         )}
-        {staffMembers.map((v) => (
-          <div key={v} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-3 flex items-center gap-2">
+        {staffMembers.map((m) => (
+          <div key={m.uid} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-3 flex items-center gap-2">
             <div className="flex-1 min-w-0">
-              <p style={{ color: COLORS.ink }} className="text-xs font-mono break-all">{v}</p>
-              {v === uid && (
+              {renameFor === m.uid ? (
+                <div className="flex gap-1.5 items-center">
+                  <input
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    placeholder="ชื่อ/ตำแหน่ง"
+                    autoFocus
+                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    className="flex-1 min-w-0 rounded-lg px-2.5 py-1.5 text-xs bg-white outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveRename}
+                    style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                    className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg flex-shrink-0"
+                  >
+                    บันทึก
+                  </button>
+                  <button type="button" onClick={() => setRenameFor(null)} style={{ color: COLORS.inkSoft }} className="text-[11px] px-1 flex-shrink-0">
+                    ยกเลิก
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{m.name || "ไม่ระบุชื่อ"}</p>
+                  <button type="button" onClick={() => startRename(m)} style={{ color: COLORS.inkSoft }} title="ตั้งชื่อเครื่องนี้">
+                    <Pencil size={12} />
+                  </button>
+                </div>
+              )}
+              <p style={{ color: COLORS.inkSoft }} className="text-[11px] font-mono break-all mt-0.5">{m.uid}</p>
+              {m.uid === uid && (
                 <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1">
                   เครื่องนี้
                 </span>
               )}
             </div>
-            {canDelete(v) ? (
+            {canDelete(m.uid) ? (
               <button
                 type="button"
-                onClick={() => setConfirmRemove(v)}
+                onClick={() => setConfirmRemove(m.uid)}
                 style={{ color: "#C0533F" }}
                 className="text-xs font-semibold px-2 py-1.5 flex-shrink-0"
               >
@@ -3325,7 +3633,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
               </button>
             ) : (
               <span
-                title={v === uid ? "ลบเครื่องที่ใช้อยู่ไม่ได้ — ใช้เครื่องอื่นลบแทน" : "ต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออก)"}
+                title={m.uid === uid ? "ลบเครื่องที่ใช้อยู่ไม่ได้ — ใช้เครื่องอื่นลบแทน" : "ต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออก)"}
                 style={{ color: "#B9A88F" }}
                 className="text-xs px-2 py-1.5 flex-shrink-0"
               >
@@ -3537,7 +3845,7 @@ function App() {
   // เดิมตอนโหลดหน้าครั้งแรกจะเห็นรูปที่เป็นลิงก์สต็อก แทนรูปจริงที่ร้านอัปโหลด จนกว่า Firestore จะตอบกลับมา
   const [menu, setMenu] = useState(FIREBASE_SYNC_ENABLED ? [] : initialMenu);
   const [promos, setPromos] = useState([]); // โปรโมชั่น — ซิงก์ผ่าน Firestore (config/promotions) เหมือนเมนู
-  const [staffMembers, setStaffMembers] = useState([]); // รายชื่อ uid ที่ได้รับสิทธิ์พนักงาน (staffUids)
+  const [staffMembers, setStaffMembers] = useState([]); // [{ uid, name }] รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids)
   const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
   const [cart, setCart] = useState([]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
@@ -3799,7 +4107,7 @@ function App() {
     const unsubscribe = db
       .collection("staffUids")
       .onSnapshot(
-        (snap) => setStaffMembers(snap.docs.map((d) => d.id)),
+        (snap) => setStaffMembers(snap.docs.map((d) => ({ uid: d.id, name: (d.data() && d.data().name) || "" }))),
         (err) => console.error("Firestore staffUids subscription failed:", err)
       );
     return unsubscribe;
@@ -3807,12 +4115,21 @@ function App() {
 
   // เพิ่มสิทธิ์พนักงานให้เครื่องใหม่ — เขียนเอกสาร staffUids/{uid}
   // (rules บังคับว่าต้องเป็นพนักงานที่มีสิทธิ์อยู่แล้วเท่านั้นถึงเขียนได้)
-  const addStaffUid = (targetUid) => {
+  const addStaffUid = (targetUid, name) => {
     if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
     db.collection("staffUids")
       .doc(targetUid)
-      .set({ addedAt: Date.now() })
+      .set({ addedAt: Date.now(), name: name || "" })
       .catch((err) => console.error("เพิ่มสิทธิ์พนักงานไม่สำเร็จ:", err));
+  };
+
+  // ตั้งชื่อ/แก้ชื่อเครื่องพนักงาน (เช่น ชื่อคนหรือตำแหน่ง) — เก็บในเอกสาร staffUids/{uid}
+  const renameStaffUid = (targetUid, name) => {
+    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
+    db.collection("staffUids")
+      .doc(targetUid)
+      .update({ name: name || "" })
+      .catch((err) => console.error("ตั้งชื่อเครื่องพนักงานไม่สำเร็จ:", err));
   };
 
   // ลบสิทธิ์พนักงาน — เครื่องนั้นจะเข้าหน้าพนักงานไม่ได้ทันที
@@ -3842,6 +4159,21 @@ function App() {
     // เลขออร์เดอร์แบบง่าย ๆ จากเลขท้ายเวลา — เหมาะกับร้านเล็กที่ออร์เดอร์ไม่ถี่มาก
     // ถ้าจะการันตีไม่ซ้ำ 100% ในระบบจริง ควรทำ counter แยกด้วย Firestore transaction
     const orderNo = Number(String(Date.now()).slice(-4));
+    // นับการใช้โค้ดส่วนลดเมื่อสั่งสำเร็จ — เพิ่มจำนวนครั้งที่ใช้ + จดเครื่องที่ใช้ (กันใช้ซ้ำถ้าเป็นแบบ 1 ครั้ง/คน)
+    const countPromoUse = () => {
+      if (!discount || !discount.promoId) return;
+      updatePromos((prev) =>
+        prev.map((p) =>
+          p.id === discount.promoId
+            ? {
+                ...p,
+                uses: (Number(p.uses) || 0) + 1,
+                usedBy: p.perCustomer ? [...((p.usedBy || []).filter((u) => u !== uid)), uid] : p.usedBy || [],
+              }
+            : p
+        )
+      );
+    };
     const newOrder = {
       orderNo,
       customerName: customer?.name || "",
@@ -3863,6 +4195,7 @@ function App() {
         setLastPaymentMethod(paymentMethod);
         setLastCustomer(customer || null);
         setLastOrder({ ...newOrder, id: docRef.id });
+        countPromoUse();
         setCart([]);
         setCustomerStage("success");
         return docRef.id;
@@ -3879,6 +4212,7 @@ function App() {
       setLastPaymentMethod(paymentMethod);
       setLastCustomer(customer || null);
       setLastOrder({ ...newOrder, id: localId });
+      countPromoUse();
       setCart([]);
       setCustomerStage("success");
       return localId;
@@ -4165,6 +4499,7 @@ function App() {
             onPaid={placeOrder}
             orders={orders}
             promos={promos}
+            uid={uid}
           />
         )}
         {role === "customer" && customerStage === "success" && (
@@ -4193,7 +4528,7 @@ function App() {
         {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} menuLoaded={menuLoaded} />}
         {role === "staff-promos" && <StaffPromoView promos={promos} updatePromos={updatePromos} menu={menu} />}
         {role === "staff-members" && (
-          <StaffMembersView uid={uid} staffMembers={staffMembers} onAdd={addStaffUid} onRemove={removeStaffUid} />
+          <StaffMembersView uid={uid} staffMembers={staffMembers} onAdd={addStaffUid} onRemove={removeStaffUid} onRename={renameStaffUid} />
         )}
         {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
       </div>
