@@ -1132,7 +1132,10 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
       ? Math.min(Number(appliedPromo.discountBaht), subtotal)
       : Math.round((subtotal * (Number(appliedPromo.discountPercent) || 0)) / 100)
     : 0;
-  const byocBaht = bringCup && byocPromo ? Math.min(Number(byocPromo.discountBaht) || 0, subtotal) : 0;
+  // นำแก้วมาเอง — ปกติใช้ได้เฉพาะรับที่ร้าน (ลูกค้าที่สั่งจัดส่งเอาแก้วไปส่งไม่ได้)
+  // แต่พนักงานตั้งได้ว่าให้ใช้ได้ทั้งสองแบบ (pickupOnly = false)
+  const byocPickupOnly = byocPromo ? byocPromo.pickupOnly !== false : true;
+  const byocBaht = bringCup && byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(Number(byocPromo.discountBaht) || 0, subtotal) : 0;
   // โปรโมชั่น "ซื้อครบ" — หักให้อัตโนมัติเมื่อยอดรวมถึงเกณฑ์ (ลูกค้าไม่ต้องทำอะไร)
   const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
   const thresholdMet = !!thresholdPromo && subtotal >= (Number(thresholdPromo.minSpend) || 0);
@@ -1277,8 +1280,8 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
           </div>
         ))}
         <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-3 mt-2">
-          {/* นำแก้วมาเอง — ลูกค้าติ๊กเพื่อรับส่วนลด (เฉพาะเมื่อร้านเปิดใช้โปรโมชั่นนี้) */}
-          {byocPromo && (
+          {/* นำแก้วมาเอง — ลูกค้าติ๊กเพื่อรับส่วนลด (เฉพาะรับที่ร้าน หรือทั้งสองแบบ ตามที่ร้านตั้งไว้) */}
+          {byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") && (
             <button
               type="button"
               onClick={() => setBringCup(!bringCup)}
@@ -1296,6 +1299,11 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
               </span>
               <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocPromo.discountBaht}</span>
             </button>
+          )}
+          {byocPromo && byocPickupOnly && deliveryMethod === "delivery" && (
+            <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-2">
+              ส่วนลดนำแก้วมาเอง ใช้ได้เฉพาะการรับที่ร้านเท่านั้น
+            </p>
           )}
           {/* โค้ดส่วนลด */}
           <div className="flex gap-2 mb-2">
@@ -1366,7 +1374,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
               <button
                 key={m.id}
                 type="button"
-                onClick={() => { setDeliveryMethod(m.id); setCustError(false); }}
+                onClick={() => { setDeliveryMethod(m.id); setCustError(false); if (m.id !== "pickup" && byocPickupOnly) setBringCup(false); }}
                 style={{
                   flex: 1,
                   background: deliveryMethod === m.id ? COLORS.peachSoft : "#FFFFFF",
@@ -2251,14 +2259,17 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onDeleteCancelled, shopOpen, onToggleShopOpen }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, shopOpen, onToggleShopOpen }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
   const [deletePickIds, setDeletePickIds] = useState([]); // id ออร์เดอร์ที่ติ๊กเลือกไว้
   const [confirmDeletePicked, setConfirmDeletePicked] = useState(false); // รอ confirm ลบที่เลือก
   const [confirmCancelId, setConfirmCancelId] = useState(null); // order id รอ confirm ยกเลิก
-  const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกทั้งหมด
+  const [cancelReason, setCancelReason] = useState(""); // สาเหตุการยกเลิก — พนักงานต้องกรอกก่อนยืนยัน
+  const [deleteCancelPickOpen, setDeleteCancelPickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ
+  const [deleteCancelPickIds, setDeleteCancelPickIds] = useState([]); // id ออร์เดอร์ที่ยกเลิกที่ติ๊กเลือกไว้
+  const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกที่เลือกไว้
 
   const advance = (id) => {
     onAdvance(id);
@@ -2279,7 +2290,8 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
     (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup")
   );
   const finishedCount = finishedOrders.length;
-  const cancelledCount = orders.filter((o) => o.status === "cancelled").length;
+  const cancelledOrders = orders.filter((o) => o.status === "cancelled");
+  const cancelledCount = cancelledOrders.length;
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
@@ -2290,7 +2302,10 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {cancelledCount > 0 && (
             <button
-              onClick={() => setConfirmDeleteCancelled(true)}
+              onClick={() => {
+                setDeleteCancelPickOpen(true);
+                setDeleteCancelPickIds([]);
+              }}
               style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
               className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
             >
@@ -2413,7 +2428,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   </span>
                   {(order.status === "new" || order.status === "preparing") && (
                     <button
-                      onClick={() => setConfirmCancelId(order.id)}
+                      onClick={() => { setConfirmCancelId(order.id); setCancelReason(""); }}
                       style={{ color: "#C0533F" }}
                       className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
                       aria-label="ยกเลิกออร์เดอร์นี้"
@@ -2450,6 +2465,11 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   </div>
                 ))}
               </div>
+              {order.status === "cancelled" && order.cancelReason && (
+                <p style={{ background: "#F3D9D3", color: "#8A3A2B" }} className="text-[11px] font-medium rounded-lg px-2 py-1.5 mb-2 flex items-start gap-1">
+                  <X size={10} className="mt-0.5 flex-shrink-0" /> สาเหตุที่ยกเลิก: {order.cancelReason}
+                </p>
+              )}
               {order.slip?.dataUrl && (
                 <button
                   onClick={() => setZoomedSlip(order.slip.url || order.slip.dataUrl)}
@@ -2689,9 +2709,18 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
             className="w-full max-w-sm rounded-2xl p-5"
           >
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">ยกเลิกออร์เดอร์นี้เลยไหม?</p>
-            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
               ใช้เมื่อลูกค้าติดต่อมายกเลิก — ออร์เดอร์จะถูกทำเครื่องหมาย "ยกเลิกแล้ว" และไม่นับรวมในยอดขาย
             </p>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">สาเหตุที่ยกเลิก (จำเป็น)</label>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="เช่น ลูกค้าขอเปลี่ยนใจ / สินค้าหมด / โทรขอยกเลิก"
+              rows={2}
+              style={{ border: `1px solid ${cancelReason.trim() ? COLORS.caramel : "#E3B7AC"}`, color: COLORS.ink }}
+              className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none resize-none mb-4"
+            />
             <div className="flex gap-2">
               <button
                 onClick={() => setConfirmCancelId(null)}
@@ -2701,9 +2730,10 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 ไม่ยกเลิก
               </button>
               <button
-                onClick={() => { onCancel(confirmCancelId); setConfirmCancelId(null); }}
-                style={{ background: "#C0533F", color: "#FFF9F0" }}
-                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+                onClick={() => { onCancel(confirmCancelId, cancelReason); setConfirmCancelId(null); setCancelReason(""); }}
+                disabled={!cancelReason.trim()}
+                style={{ background: cancelReason.trim() ? "#C0533F" : "#D8C9B8", color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold disabled:cursor-not-allowed"
               >
                 ยืนยันยกเลิก
               </button>
@@ -2712,7 +2742,111 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       )}
 
-      {/* ยืนยันก่อนลบที่ยกเลิกแล้วทั้งหมด */}
+      {/* ชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ — ลบเฉพาะที่เลือก กันลบทั้งก้อนพลาด */}
+      {deleteCancelPickOpen && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end">
+          <div onClick={() => setDeleteCancelPickOpen(false)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
+            <div className="flex items-center justify-between mb-1">
+              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+                เลือกออร์เดอร์ที่ยกเลิกที่ต้องการลบ
+              </h2>
+              <button onClick={() => setDeleteCancelPickOpen(false)} style={{ color: COLORS.inkSoft }}>
+                <X size={20} />
+              </button>
+            </div>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-2">
+              ติ๊กเฉพาะรายการที่ยกเลิกแล้วและอยากลบ ({cancelledCount} รายการ) — ออร์เดอร์อื่นไม่โดนแตะ
+            </p>
+            <button
+              onClick={() => {
+                setDeleteCancelPickIds((prev) =>
+                  prev.length === cancelledOrders.length && cancelledOrders.length > 0
+                    ? []
+                    : cancelledOrders.map((o) => o.id)
+                );
+              }}
+              style={{ color: COLORS.caramelDark }}
+              className="text-xs font-semibold self-start mb-2"
+            >
+              {deleteCancelPickIds.length === cancelledOrders.length && cancelledOrders.length > 0
+                ? "ไม่เลือกทั้งหมด"
+                : "เลือกทั้งหมด"}
+            </button>
+
+            <div className="overflow-y-auto space-y-2 pb-3">
+              {cancelledOrders.map((order) => {
+                const checked = deleteCancelPickIds.includes(order.id);
+                const total = calcOrderTotal(order);
+                return (
+                  <button
+                    key={order.id}
+                    onClick={() =>
+                      setDeleteCancelPickIds((prev) =>
+                        checked ? prev.filter((id) => id !== order.id) : [...prev, order.id]
+                      )
+                    }
+                    style={{
+                      background: "#FFFFFF",
+                      border: `1.5px solid ${checked ? COLORS.caramel : COLORS.line}`,
+                    }}
+                    className="w-full rounded-2xl px-4 py-3 flex items-center gap-3 text-left"
+                  >
+                    <div
+                      style={{
+                        border: `2px solid ${checked ? COLORS.caramel : COLORS.line}`,
+                        background: checked ? COLORS.caramel : "transparent",
+                      }}
+                      className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+                    >
+                      {checked && <Check size={12} color="#fff" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
+                        #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
+                      </p>
+                      <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
+                        {order.method === "pickup"
+                          ? "รับที่ร้าน"
+                          : order.deliveryDate && order.deliveryTime
+                          ? `จัดส่ง ${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`
+                          : "จัดส่ง"}{" "}
+                        · ฿{total}
+                        {order.cancelReason ? ` · ${order.cancelReason}` : ""}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ borderTop: `1px solid ${COLORS.line}` }} className="pt-3 mt-1 flex gap-2">
+              <button
+                onClick={() => setDeleteCancelPickOpen(false)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-3 text-sm font-semibold"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  if (deleteCancelPickIds.length > 0) setConfirmDeleteCancelled(true);
+                }}
+                disabled={deleteCancelPickIds.length === 0}
+                style={{
+                  background: deleteCancelPickIds.length > 0 ? "#C0533F" : "#D8C9B8",
+                  color: "#FFF9F0",
+                }}
+                className="flex-1 rounded-xl py-3 text-sm font-semibold disabled:cursor-not-allowed"
+              >
+                ลบ {deleteCancelPickIds.length} รายการ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันลบออร์เดอร์ที่ยกเลิกที่ติ๊กเลือกไว้ */}
       {confirmDeleteCancelled && (
         <div
           onClick={() => setConfirmDeleteCancelled(false)}
@@ -2725,9 +2859,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
             className="w-full max-w-sm rounded-2xl p-5"
           >
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">
-              ลบออร์เดอร์ที่ยกเลิกทั้งหมด {cancelledCount} รายการเลยไหม?
+              ลบ {deleteCancelPickIds.length} รายการที่เลือกเลยไหม?
             </p>
-            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">ลบแล้วกู้คืนไม่ได้ (ไม่กระทบออร์เดอร์อื่น)</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">ลบแล้วกู้คืนไม่ได้ (เฉพาะที่ยกเลิกที่ติ๊กไว้)</p>
             <div className="flex gap-2">
               <button
                 onClick={() => setConfirmDeleteCancelled(false)}
@@ -2737,11 +2871,16 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 ยกเลิก
               </button>
               <button
-                onClick={() => { onDeleteCancelled(); setConfirmDeleteCancelled(false); }}
+                onClick={() => {
+                  onDeleteOrders(deleteCancelPickIds);
+                  setConfirmDeleteCancelled(false);
+                  setDeleteCancelPickOpen(false);
+                  setDeleteCancelPickIds([]);
+                }}
                 style={{ background: "#C0533F", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
-                ลบทั้งหมด
+                ลบเลย
               </button>
             </div>
           </div>
@@ -2963,12 +3102,13 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     code: "",
     maxUses: "",
     perCustomer: false,
+    pickupOnly: true,
   });
 
   const startNew = () => {
     setEditing("new");
     setConfirmDelete(null);
-    setForm({ name: "", type: "discount", active: true, discountMode: "percent", discountAmount: "", minSpend: "", itemIds: [], addOnIds: [], code: "", maxUses: "", perCustomer: false });
+    setForm({ name: "", type: "discount", active: true, discountMode: "percent", discountAmount: "", minSpend: "", itemIds: [], addOnIds: [], code: "", maxUses: "", perCustomer: false, pickupOnly: true });
   };
 
   const startEdit = (p) => {
@@ -2988,6 +3128,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       code: p.code || "",
       maxUses: String(Number(p.maxUses) > 0 ? p.maxUses : ""),
       perCustomer: !!p.perCustomer,
+      pickupOnly: p.pickupOnly !== false, // โปรโมชั่นเก่า (ไม่มีฟิลด์) ถือว่าเฉพาะรับที่ร้านเหมือนเดิม
     });
   };
 
@@ -3016,6 +3157,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       code: form.type === "code" ? form.code.trim().toUpperCase() : "",
       maxUses: form.type === "code" ? Math.max(0, Math.floor(Number(form.maxUses) || 0)) : 0,
       perCustomer: form.type === "code" ? !!form.perCustomer : false,
+      pickupOnly: form.type === "byoc" ? form.pickupOnly !== false : false,
       uses: existing && Number(existing.uses) > 0 ? Number(existing.uses) : 0,
       usedBy: existing && Array.isArray(existing.usedBy) ? existing.usedBy : [],
     };
@@ -3054,7 +3196,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     const target = !p.itemIds || p.itemIds.length === 0 ? "ทุกเมนู" : `เฉพาะ ${p.itemIds.length} เมนู`;
     if (p.type === "discount") return `ลด ${discountText(p)} · ${target}`;
     if (p.type === "code") return `โค้ด “${p.code}” · ลด ${discountText(p)} จากยอดรวม`;
-    if (p.type === "byoc") return `นำแก้วมาเอง · ลด ${discountText(p)} จากยอดรวม`;
+    if (p.type === "byoc") return `นำแก้วมาเอง · ลด ${discountText(p)} จากยอดรวม${p.pickupOnly === false ? " · รับที่ร้าน/จัดส่งได้" : " · เฉพาะรับที่ร้าน"}`;
     if (p.type === "threshold") return `ซื้อครบ ฿${p.minSpend} ลด ${discountText(p)} (อัตโนมัติ)`;
     return `ตัวเลือกฟรี ${(p.addOnIds || []).length} รายการ · ${target}`;
   };
@@ -3285,6 +3427,28 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       : form.discountMode === "baht"
                         ? "เช่น 5 = ลด 5 บาท"
                         : "เช่น 10 = ลด 10%"}
+                  </p>
+                </div>
+              )}
+
+              {form.type === "byoc" && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, pickupOnly: !f.pickupOnly }))}
+                    style={{
+                      background: form.pickupOnly ? COLORS.sageSoft : "#FFFFFF",
+                      border: `1px solid ${form.pickupOnly ? COLORS.sage : COLORS.line}`,
+                    }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium flex items-center justify-between gap-2"
+                  >
+                    <span style={{ color: form.pickupOnly ? COLORS.sage : COLORS.inkSoft }}>ใช้ได้เฉพาะการรับที่ร้าน</span>
+                    <Chip tone={form.pickupOnly ? "sage" : "caramel"}>{form.pickupOnly ? "เปิด" : "ปิด"}</Chip>
+                  </button>
+                  <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
+                    {form.pickupOnly
+                      ? "ลูกค้าที่สั่งจัดส่งจะไม่เห็นช่องติ๊กนำแก้วมาเอง"
+                      : "ปิด = ลูกค้าสั่งจัดส่งก็ติ๊กนำแก้วมาเองได้ (ใช้ได้ทั้งสองแบบ)"}
                   </p>
                 </div>
               )}
@@ -4246,15 +4410,18 @@ function App() {
 
   // ยกเลิกออร์เดอร์ — เช่นลูกค้าโทรมายกเลิกที่ร้าน แยกจากการลบถาวร
   // ออร์เดอร์ที่ยกเลิกยังอยู่ในระบบให้ดูย้อนหลังได้ แต่จะไม่ถูกนับรวมในแดชบอร์ดยอดขาย
-  const cancelOrder = async (id) => {
+  // ยกเลิกออร์เดอร์ — เช่นลูกค้าโทรมายกเลิกที่ร้าน ต้องระบุสาเหตุด้วยเสมอ
+  // อัปเดต state ท้องถิ่นทันที (optimistic) แล้วค่อยซิงก์ Firestore ด้านหลัง
+  const cancelOrder = async (id, reason) => {
+    const cancelReason = (reason || "").trim();
+    const cancelledAt = Date.now();
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: "cancelled", cancelReason, cancelledAt } : o)));
     if (FIREBASE_SYNC_ENABLED) {
       try {
-        await db.collection("orders").doc(id).update({ status: "cancelled" });
+        await db.collection("orders").doc(id).update({ status: "cancelled", cancelReason, cancelledAt });
       } catch (err) {
         console.error("Failed to cancel order:", err);
       }
-    } else {
-      setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: "cancelled" } : o)));
     }
   };
 
@@ -4285,23 +4452,6 @@ function App() {
       } catch (err) {
         console.error("Failed to delete orders:", err);
       }
-    }
-  };
-
-  // ลบออร์เดอร์ที่สถานะ "ยกเลิกแล้ว" ทั้งหมดในครั้งเดียว
-  const deleteCancelledOrders = async () => {
-    const cancelledIds = orders.filter((o) => o.status === "cancelled").map((o) => o.id);
-    if (cancelledIds.length === 0) return;
-    if (FIREBASE_SYNC_ENABLED) {
-      try {
-        const batch = db.batch();
-        cancelledIds.forEach((id) => batch.delete(db.collection("orders").doc(id)));
-        await batch.commit();
-      } catch (err) {
-        console.error("Failed to bulk-delete cancelled orders:", err);
-      }
-    } else {
-      setOrders((prev) => prev.filter((o) => o.status !== "cancelled"));
     }
   };
 
@@ -4525,7 +4675,6 @@ function App() {
             onCancel={cancelOrder}
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
-            onDeleteCancelled={deleteCancelledOrders}
             shopOpen={shopOpen}
             onToggleShopOpen={toggleShopOpen}
           />
