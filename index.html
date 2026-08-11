@@ -92,6 +92,7 @@ function ShoppingBag(props) { return (<IconBase {...props}><path d="M6 9h12l-1 1
 function ChefHat(props) { return (<IconBase {...props}><path d="M7 21h10v-4H7v4z" /><path d="M6.5 17c-2-.5-3.2-2.4-2.7-4.4.4-1.6 1.8-2.7 3.4-2.8A4 4 0 0 1 11 6a4 4 0 0 1 6.8 3.8c1.6.1 3 1.2 3.4 2.8.5 2-.7 3.9-2.7 4.4" /></IconBase>); }
 function Users(props) { return (<IconBase {...props}><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3 2.7-5 6-5s6 2 6 5" /><circle cx="17" cy="9" r="2.5" /><path d="M15.5 20c.3-2 1.8-3.5 4-3.8" /></IconBase>); }
 function Truck(props) { return (<IconBase {...props}><rect x="1.5" y="7" width="13" height="9" rx="1" /><path d="M14.5 10.5H18l3 3.2V16h-2" /><circle cx="6.5" cy="18" r="1.8" /><circle cx="16.5" cy="18" r="1.8" /></IconBase>); }
+function DownloadIcon(props) { return (<IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></IconBase>); }
 function CalendarIcon(props) { return (<IconBase {...props}><rect x="3" y="4.5" width="18" height="16" rx="2" /><line x1="3" y1="9.5" x2="21" y2="9.5" /><line x1="8" y1="2.5" x2="8" y2="6.5" /><line x1="16" y1="2.5" x2="16" y2="6.5" /></IconBase>); }
 
 // TODO: เปลี่ยนเป็นรหัสของร้านเอง — กันลูกค้ากดหลุดเข้าหน้าพนักงานเฉย ๆ
@@ -235,6 +236,57 @@ const ensureUniqueAddOnIds = (groups) => {
     });
     return { ...g, id: gid, options };
   });
+};
+
+// ---------- โปรโมชั่น (promotions) ----------
+// ประเภท: discount = ลดราคาเมนู | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด
+// โครงสร้าง: { id, name, type, active, discountPercent, itemIds ([] = ทุกเมนู), addOnIds, code }
+const PROMO_TYPE_LABEL = { discount: "ลดราคาเมนู", freeAddOn: "ท็อปปิ้งฟรี", code: "โค้ดส่วนลด" };
+
+// % ลดสูงสุดของเมนูนี้จากโปรโมชั่นลดราคาที่เปิดใช้ (ตรงกับเมนู หรือเป็น "ทุกเมนู")
+const discountPercentFor = (itemId, promos) =>
+  Math.max(0, ...(promos || [])
+    .filter(
+      (p) =>
+        p && p.active && p.type === "discount" &&
+        (!p.itemIds || p.itemIds.length === 0 || p.itemIds.includes(itemId))
+    )
+    .map((p) => Number(p.discountPercent) || 0));
+
+// ราคาเมนูหลังหักส่วนลด (ปัดเป็นสตางค์)
+const effectiveItemPrice = (item, promos) => {
+  const pct = discountPercentFor(item && item.id, promos);
+  return pct > 0 ? Math.round(item.price * (100 - pct)) / 100 : item.price;
+};
+
+// ตัวเลือกเพิ่มนี้ฟรีไหม (โปรโมชั่นท็อปปิ้งฟรีที่เปิดใช้ + ตรงกับเมนู)
+const isAddOnFree = (itemId, optionId, promos) =>
+  (promos || []).some(
+    (p) =>
+      p && p.active && p.type === "freeAddOn" &&
+      (!p.itemIds || p.itemIds.length === 0 || p.itemIds.includes(itemId)) &&
+      (p.addOnIds || []).includes(optionId)
+  );
+
+const effectiveAddOnPrice = (itemId, option, promos) =>
+  isAddOnFree(itemId, option && option.id, promos) ? 0 : Number((option && option.price) || 0);
+
+// หาโค้ดส่วนลดที่เปิดใช้และตรงกับที่กรอก (ไม่สนตัวพิมพ์เล็ก-ใหญ่)
+const findPromoCode = (code, promos) => {
+  const c = String(code || "").trim().toUpperCase();
+  if (!c) return null;
+  return (
+    (promos || []).find(
+      (p) => p && p.active && p.type === "code" && String(p.code || "").trim().toUpperCase() === c
+    ) || null
+  );
+};
+
+// ยอดรวมออร์เดอร์ (หักส่วนลดโค้ดแล้ว) — ใช้ในหน้าพนักงาน/แดชบอร์ด/ใบหลักฐาน
+const calcOrderTotal = (order) => {
+  const subtotal = ((order && order.items) || []).reduce((s, i) => s + i.price * i.qty, 0);
+  const discount = (order && order.discount && Number(order.discount.baht)) || 0;
+  return Math.max(0, subtotal - discount);
 };
 
 // ---------- Delivery scheduling helpers ----------
@@ -428,7 +480,7 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded }) {
+function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -449,7 +501,10 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
     const cartId = selectedAddOns.length
       ? `${item.id}::${selectedAddOns.map((a) => a.id).sort().join(",")}`
       : item.id;
-    const unitPrice = item.price + selectedAddOns.reduce((s, a) => s + a.price, 0);
+    // ราคาเมนูหลังหักโปรโมชั่นลดราคา + ตัวเลือก (ตัวที่ฟรีจากโปรโมชั่นท็อปปิ้งฟรีจะคิด ฿0)
+    const unitPrice =
+      effectiveItemPrice(item, promos) +
+      selectedAddOns.reduce((s, a) => s + (Number(a.price) || 0), 0);
     setCart((prev) => {
       const existing = prev.find((c) => c.cartId === cartId);
       if (existing) {
@@ -492,10 +547,16 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
 
   const confirmAddOnSheet = () => {
     const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
-    const allOptions = groups.flatMap((g) => (g.options || []).map((o) => ({ ...o, gid: g.id })));
+    // ใช้ราคาหลังโปรโมชั่นท็อปปิ้งฟรีเหมือนที่แสดงในชีต (ตัวที่ฟรีจะคิด ฿0 ในตะกร้า)
+    // เดิมใช้ราคาเต็มของตัวเลือก ทำให้ท็อปปิ้งที่โชว์ "ฟรี" ยังโดนคิดเงินในตะกร้า
+    const allOptions = groups.flatMap((g) =>
+      (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos) }))
+    );
     const selected = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
     if (editingCartId) {
       updateCartItem(editingCartId, selected);
+      // แก้ไขเสร็จแล้ว — เปิดตะกร้ากลับให้เห็นรายการที่อัปเดตแล้วทันที
+      setShowCart(true);
     } else {
       addToCart(addOnSheetFor, selected);
     }
@@ -519,6 +580,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
     setEditingCartId(cartItem.cartId);
     setAddOnSheetFor(item);
     setSelectedAddOnKeys(keys);
+    // ปิดหน้าต่างตะกร้าก่อนเปิดชีตแก้ไข — กันสองหน้าต่างซ้อนทับกัน (ตะกร้าถูกเรนเดอร์ทีหลังจะบังส่วนล่างของชีต)
+    setShowCart(false);
   };
 
   // บันทึกการแก้ไขรายการในตะกร้า — ถ้าชุดตัวเลือกใหม่ตรงกับรายการอื่นที่มีอยู่แล้ว ให้รวมจำนวนเข้าด้วยกัน
@@ -530,7 +593,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
     const newCartId = selected.length
       ? `${menuItem.id}::${selected.map((a) => a.id).sort().join(",")}`
       : menuItem.id;
-    const unitPrice = menuItem.price + selected.reduce((s, a) => s + a.price, 0);
+    const unitPrice =
+      effectiveItemPrice(menuItem, promos) +
+      selected.reduce((s, a) => s + (Number(a.price) || 0), 0);
     setCart((prev) => {
       const withoutOld = prev.filter((c) => c.cartId !== oldCartId);
       const existing = withoutOld.find((c) => c.cartId === newCartId);
@@ -648,6 +713,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
         {menuLoaded && visibleMenu.map((item) => {
           const Icon = CATEGORY_ICONS[item.category];
           const hasAddOns = item.addOns && item.addOns.length > 0;
+          // ราคาหลังโปรโมชั่นลดราคาเมนู (ถ้ามี) — แสดงราคาเดิมขีดฆ่า + ป้าย %
+          const discountedPrice = effectiveItemPrice(item, promos);
+          const hasDiscount = discountedPrice < item.price;
           // สำหรับเมนูที่ไม่มีตัวเลือกเพิ่ม ใช้ cartId ตรงกับ item.id ตรง ๆ (พฤติกรรมเดิม)
           const inCart = !hasAddOns ? cart.find((c) => c.cartId === item.id) : null;
           // สำหรับเมนูที่มีตัวเลือกเพิ่ม อาจมีหลายรายการในตะกร้าที่มาจากเมนูเดียวกัน
@@ -685,9 +753,17 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
                 </p>
                 <div className="flex items-center justify-between mt-2.5">
                   <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">
-                    ฿{item.price}
+                    {hasDiscount && (
+                      <span style={{ color: COLORS.inkSoft }} className="line-through font-normal text-xs mr-1">฿{item.price}</span>
+                    )}
+                    ฿{discountedPrice}
                     {hasAddOns && (
                       <span style={{ color: COLORS.inkSoft }} className="font-normal text-xs"> (เลือกเพิ่มได้)</span>
+                    )}
+                    {hasDiscount && (
+                      <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
+                        -{discountPercentFor(item.id, promos)}%
+                      </span>
                     )}
                   </span>
                   {hasAddOns ? (
@@ -749,7 +825,10 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
       {/* Add-on picker sheet — opens when a menu item has selectable extras */}
       {addOnSheetFor && (() => {
         const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
-        const allOptions = groups.flatMap((g) => (g.options || []).map((o) => ({ ...o, gid: g.id })));
+        // ราคาแต่ละตัวเลือกหลังใช้โปรโมชั่นท็อปปิ้งฟรี — ตัวที่ฟรีจะกลายเป็น ฿0
+        const allOptions = groups.flatMap((g) =>
+          (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos) }))
+        );
         const selectedOptions = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
         // กลุ่มที่บังคับเลือก ต้องมีตัวเลือกอย่างน้อย 1 รายการที่ถูกเลือก ถึงจะกดยืนยันได้
         const missingRequired = groups.some(
@@ -809,7 +888,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
                           >
                             <span style={{ color: COLORS.ink }} className="text-sm font-medium">{a.name}</span>
                             <span className="flex items-center gap-2.5">
-                              <span style={{ color: COLORS.caramelDark }} className="text-xs font-bold">+฿{a.price}</span>
+                              <span style={{ color: isAddOnFree(addOnSheetFor.id, a.id, promos) ? COLORS.sage : COLORS.caramelDark }} className="text-xs font-bold">
+                                {isAddOnFree(addOnSheetFor.id, a.id, promos) ? "ฟรี" : `+฿${a.price}`}
+                              </span>
                               <div
                                 style={{
                                   border: `2px solid ${checked ? COLORS.caramel : COLORS.line}`,
@@ -834,7 +915,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
               )}
               <PrimaryButton full onClick={confirmAddOnSheet} disabled={missingRequired}>
                 {editingCartId ? "บันทึกการแก้ไข" : "เพิ่มลงตะกร้า"} · ฿
-                {addOnSheetFor.price + selectedOptions.reduce((s, a) => s + a.price, 0)}
+                {effectiveItemPrice(addOnSheetFor, promos) + selectedOptions.reduce((s, a) => s + (Number(a.price) || 0), 0)}
               </PrimaryButton>
             </div>
           </div>
@@ -894,7 +975,12 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
                           + {item.addOns.map((a) => a.name).join(", ")}
                         </p>
                       )}
-                      <p style={{ color: COLORS.inkSoft }} className="text-xs">฿{item.price} × {item.qty}</p>
+                      <p style={{ color: COLORS.inkSoft }} className="text-xs">
+                        {item.basePrice > item.price && (
+                          <span className="line-through mr-1">฿{item.basePrice}</span>
+                        )}
+                        ฿{item.price} × {item.qty}
+                      </p>
                     </div>
                     <div style={{ background: COLORS.peachSoft }} className="flex items-center gap-3 rounded-full px-1">
                       <button onClick={() => changeQty(item.cartId, -1)} style={{ color: COLORS.caramelDark }} className="w-7 h-7 flex items-center justify-center">
@@ -976,7 +1062,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded })
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders }) {
+function CheckoutView({ cart, onBack, onPaid, orders, promos }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
@@ -990,8 +1076,33 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
   const [custError, setCustError] = useState(false);
   const custFormRef = useRef(null);
   const dateOptions = useMemo(() => upcomingDateOptions(7), []);
-  const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+  // โค้ดส่วนลด — ลด % จากยอดรวมสินค้า (เฉพาะโค้ดที่พนักงานสร้างไว้ในหน้าโปรโมชั่น)
+  const [promoCode, setPromoCode] = useState("");
+  const [appliedPromo, setAppliedPromo] = useState(null);
+  const [promoError, setPromoError] = useState(false);
+  const subtotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
+  const discountBaht = appliedPromo
+    ? Math.round((subtotal * (Number(appliedPromo.discountPercent) || 0)) / 100)
+    : 0;
+  const total = Math.max(0, subtotal - discountBaht);
   const isCash = method === "cash";
+
+  const applyPromoCode = () => {
+    const promo = findPromoCode(promoCode, promos);
+    if (promo) {
+      setAppliedPromo(promo);
+      setPromoError(false);
+    } else {
+      setAppliedPromo(null);
+      setPromoError(true);
+    }
+  };
+
+  // ข้อมูลส่วนลดที่จะแนบไปกับออร์เดอร์ (ส่งให้พนักงานเห็นยอดที่หักจริง)
+  const getDiscount = () =>
+    appliedPromo && discountBaht > 0
+      ? { code: appliedPromo.code, percent: Number(appliedPromo.discountPercent) || 0, baht: discountBaht }
+      : null;
 
   // แค่เก็บรูปสลิปไว้ให้พนักงานเปิดดูเอง — ไม่มีการอ่าน/ตรวจสอบอัตโนมัติใด ๆ
   // รูปจะถูกบีบอัดแล้วฝังลง Firestore โดยตรง (ไม่ผ่าน Firebase Storage เพราะ Storage
@@ -1046,14 +1157,14 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
       deliveryTime: isPickup ? "" : custDeliveryTime,
     };
     if (isCash) {
-      onPaid(method, null, customer);
+      onPaid(method, null, customer, getDiscount());
       return;
     }
     if (!slipImg) return;
     setPaying(true);
     setTimeout(() => {
       setPaying(false);
-      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer);
+      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer, getDiscount());
     }, 400);
   };
 
@@ -1085,9 +1196,55 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
             )}
           </div>
         ))}
-        <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="flex justify-between pt-3 mt-2">
-          <span style={{ color: COLORS.ink }} className="font-semibold">ยอดรวมทั้งหมด</span>
-          <span style={{ color: COLORS.caramelDark }} className="font-bold text-lg">฿{total}</span>
+        <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-3 mt-2">
+          {/* โค้ดส่วนลด */}
+          <div className="flex gap-2 mb-2">
+            <input
+              value={promoCode}
+              onChange={(e) => {
+                setPromoCode(e.target.value.toUpperCase());
+                setPromoError(false);
+              }}
+              placeholder="ใส่โค้ดส่วนลด (ถ้ามี)"
+              style={{
+                border: `1px solid ${promoError ? "#C0533F" : COLORS.line}`,
+                color: COLORS.ink,
+                textTransform: "uppercase",
+              }}
+              className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm focus:outline-none placeholder:normal-case"
+            />
+            <button
+              type="button"
+              onClick={appliedPromo ? () => { setAppliedPromo(null); setPromoCode(""); setPromoError(false); } : applyPromoCode}
+              style={{
+                background: appliedPromo ? COLORS.sageSoft : COLORS.caramel,
+                color: appliedPromo ? COLORS.sage : "#FFF9F0",
+              }}
+              className="rounded-xl px-4 py-2.5 text-sm font-semibold flex-shrink-0 active:scale-[0.98] transition-transform"
+            >
+              {appliedPromo ? "ลบโค้ด" : "ใช้โค้ด"}
+            </button>
+          </div>
+          {promoError && (
+            <p style={{ color: "#C0533F" }} className="text-[11px] font-semibold mb-1">
+              โค้ดส่วนลดไม่ถูกต้อง หรือยังไม่ได้เปิดใช้
+            </p>
+          )}
+          {appliedPromo && (
+            <p style={{ color: COLORS.sage }} className="text-[11px] font-semibold mb-1">
+              โค้ด {appliedPromo.code} · ลด {Number(appliedPromo.discountPercent) || 0}% จากยอดรวม
+            </p>
+          )}
+          {appliedPromo && discountBaht > 0 && (
+            <div className="flex justify-between text-xs mb-1">
+              <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลดโค้ด {appliedPromo.code}</span>
+              <span style={{ color: COLORS.sage }} className="font-semibold">-฿{discountBaht}</span>
+            </div>
+          )}
+          <div className="flex justify-between pt-2">
+            <span style={{ color: COLORS.ink }} className="font-semibold">ยอดรวมทั้งหมด</span>
+            <span style={{ color: COLORS.caramelDark }} className="font-bold text-lg">฿{total}</span>
+          </div>
         </div>
       </div>
 
@@ -1333,7 +1490,193 @@ function CheckoutView({ cart, onBack, onPaid, orders }) {
 }
 
 // ================= ORDER SUCCESS =================
-function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod }) {
+// วาดภาพหลักฐานออร์เดอร์ (ใบยืนยัน) ลง canvas — ใช้ Canvas API ล้วน ๆ ไม่พึ่งไลบรารีเพิ่ม
+// ให้ลูกค้าเซฟ/แชร์ไว้เป็นหลักฐานเวลามารับสินค้าหรือรับของที่บ้าน
+function drawOrderReceipt(order) {
+  const items = (order && order.items) || [];
+  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+  const discount = (order && order.discount && Number(order.discount.baht)) || 0;
+  const total = Math.max(0, subtotal - discount);
+  const W = 640;
+  const M = 28;
+
+  // คำนวณความสูงใบตามจำนวนรายการ
+  let itemH = 0;
+  items.forEach((i) => {
+    itemH += 46;
+    if (i.addOns && i.addOns.length) itemH += 22 * i.addOns.length;
+    if (i.note && i.note.trim()) itemH += 30;
+  });
+  const H = 260 + itemH + 130;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  // พื้นหลังครีม
+  ctx.fillStyle = "#FBF3E7";
+  ctx.fillRect(0, 0, W, H);
+
+  const text = (str, x, y, size, weight, color, align = "left") => {
+    ctx.font = `${weight || 500} ${size}px sans-serif`;
+    ctx.fillStyle = color || "#3A2A1E";
+    ctx.textAlign = align;
+    ctx.fillText(str, x, y);
+  };
+
+  // ห่อบรรทัดข้อความยาว ๆ ตามความกว้างสูงสุด
+  const wrap = (str, maxWidth, size) => {
+    ctx.font = `500 ${size}px sans-serif`;
+    const lines = [];
+    let cur = "";
+    for (const ch of String(str)) {
+      if (ctx.measureText(cur + ch).width > maxWidth && cur) {
+        lines.push(cur);
+        cur = ch;
+      } else {
+        cur += ch;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  };
+
+  // ส่วนหัวร้าน + เลขออร์เดอร์
+  text("น้ำหวาน & เบเกอรี่", W / 2, 62, 34, 700, "#B5652E", "center");
+  text("หลักฐานยืนยันออร์เดอร์", W / 2, 92, 16, 500, "#6B5642", "center");
+  text(`ออร์เดอร์ #${order.orderNo}`, W / 2, 142, 40, 700, "#3A2A1E", "center");
+
+  ctx.strokeStyle = "#E4D3B8";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(M, 168);
+  ctx.lineTo(W - M, 168);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  let y = 214;
+
+  // ข้อมูลลูกค้า / วิธีรับสินค้า
+  const info = [];
+  if (order.customerName) info.push(["ชื่อลูกค้า", order.customerName]);
+  if (order.method === "pickup") {
+    info.push(["การรับสินค้า", "รับที่ร้าน"]);
+  } else {
+    info.push(["การรับสินค้า", `จัดส่ง${order.houseNo ? " · บ้านเลขที่ " + order.houseNo : ""}`]);
+    if (order.deliveryDate && order.deliveryTime) {
+      info.push(["เวลาจัดส่ง", `${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`]);
+    }
+  }
+  info.push(["ชำระเงิน", order.paymentMethod === "cash" ? "เงินสด (จ่ายตอนรับสินค้า)" : "พร้อมเพย์/โอน"]);
+
+  info.forEach(([k, v]) => {
+    text(k, M, y, 14, 600, "#6B5642");
+    text(v, W - M, y, 14, 500, "#3A2A1E", "right");
+    y += 27;
+  });
+
+  y += 16;
+
+  // หัวตารางรายการ
+  text("รายการ", M, y, 16, 700, "#3A2A1E");
+  text("รวม", W - M, y, 16, 700, "#3A2A1E", "right");
+  y += 12;
+  ctx.strokeStyle = "#E4D3B8";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(M, y);
+  ctx.lineTo(W - M, y);
+  ctx.stroke();
+  y += 28;
+
+  items.forEach((i) => {
+    const itemTotal = i.price * i.qty;
+    text(`฿${itemTotal}`, W - M, y, 16, 600, "#3A2A1E", "right");
+    // ชื่อเมนู + จำนวน — ถ้ายาวให้ขึ้นบรรทัดใหม่ (สูงสุด 2 บรรทัด)
+    const lines = wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).slice(0, 2);
+    lines.forEach((ln, idx) => {
+      text(idx === 1 ? ln + "…" : ln, M, y + idx * 24, 16, 500, "#3A2A1E");
+    });
+    y += 28 + (lines.length - 1) * 24;
+    if (i.addOns && i.addOns.length) {
+      i.addOns.forEach((a) => {
+        text(`+ ${a.name}`, M + 18, y, 14, 400, "#8A4A1F");
+        text(`฿${a.price || 0}`, W - M, y, 14, 400, "#8A4A1F", "right");
+        y += 22;
+      });
+    }
+    if (i.note && i.note.trim()) {
+      text(`หมายเหตุ: ${i.note.trim()}`, M + 18, y, 13, 400, "#B5652E");
+      y += 30;
+    }
+  });
+
+  y += 10;
+  ctx.strokeStyle = "#E4D3B8";
+  ctx.beginPath();
+  ctx.moveTo(M, y);
+  ctx.lineTo(W - M, y);
+  ctx.stroke();
+  y += 32;
+
+  if (discount > 0) {
+    text("ส่วนลดโค้ด", M, y, 14, 500, "#6B5642");
+    text(`-฿${discount}`, W - M, y, 14, 600, "#6B5642", "right");
+    y += 24;
+  }
+
+  text("ยอดรวม", M, y, 20, 700, "#3A2A1E");
+  text(`฿${total}`, W - M, y, 22, 700, "#B5652E", "right");
+  y += 44;
+
+  // ท้ายใบ
+  text("นำภาพนี้แสดงที่ร้านเมื่อมารับสินค้า / รับของ", W / 2, y, 15, 600, "#6B5642", "center");
+  text(new Date(order.createdAt).toLocaleString("th-TH"), W / 2, y + 30, 13, 400, "#6B5642", "center");
+
+  return canvas;
+}
+
+
+function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order }) {
+  const [receiptState, setReceiptState] = useState(""); // "" | "saving" | "done" | "error"
+
+  // สร้างภาพหลักฐานแล้วบันทึก — บนมือถือถ้าแชร์ไฟล์ได้จะเปิดช่องแชร์ (แถมมี "บันทึกลงเครื่อง" ในนั้น)
+  // ถ้าแชร์ไม่ได้ (เช่นบนคอม) จะดาวน์โหลดเป็นไฟล์ PNG ตรง ๆ
+  const saveReceipt = async () => {
+    if (!order || receiptState === "saving") return;
+    setReceiptState("saving");
+    try {
+      const canvas = drawOrderReceipt(order);
+      const dataUrl = canvas.toDataURL("image/png");
+      const fileName = `หลักฐานออร์เดอร์-${order.orderNo}.png`;
+      try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const file = new File([blob], fileName, { type: "image/png" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: `หลักฐานออร์เดอร์ #${order.orderNo}`, text: `ออร์เดอร์ #${order.orderNo}${customer?.name ? " · " + customer.name : ""}` });
+          } catch (e) {
+            // ผู้ใช้ยกเลิกช่องแชร์ — ถือว่าจบ ไม่ต้องดาวน์โหลดซ้ำ
+          }
+          setReceiptState("done");
+          return;
+        }
+      } catch (e) {
+        // share/File ใช้ไม่ได้ — ตกไปดาวน์โหลดตรง ๆ ด้านล่าง
+      }
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = fileName;
+      a.click();
+      setReceiptState("done");
+    } catch (err) {
+      console.error("Failed to create receipt image:", err);
+      setReceiptState("error");
+    }
+  };
+
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-6 pt-16 flex flex-col items-center text-center">
       <div style={{ background: COLORS.sageSoft }} className="w-20 h-20 rounded-full flex items-center justify-center mb-5">
@@ -1359,6 +1702,27 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod }) {
           อย่าลืมเตรียมเงินสด{customer?.method === "pickup" ? "มารับของ" : "จ่ายพนักงานตอนไปส่งของ"}นะครับ
         </p>
       )}
+
+      <button
+        onClick={saveReceipt}
+        disabled={receiptState === "saving"}
+        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+        className="w-full max-w-xs rounded-2xl px-5 py-3.5 text-sm font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60 active:scale-[0.98] transition-transform mt-1"
+      >
+        {receiptState === "saving" ? <Loader2 size={18} className="animate-spin" /> : <DownloadIcon size={18} />}
+        {receiptState === "saving" ? "กำลังสร้างภาพ..." : "บันทึกหลักฐานการสั่ง (ภาพ)"}
+      </button>
+      {receiptState === "done" && (
+        <p style={{ color: COLORS.sage }} className="text-xs font-semibold mt-2">
+          บันทึกแล้ว! เปิดภาพนี้ที่ร้านตอนรับสินค้าได้เลย
+        </p>
+      )}
+      {receiptState === "error" && (
+        <p style={{ color: "#C0533F" }} className="text-xs font-semibold mt-2">
+          สร้างภาพไม่สำเร็จ ลองอีกครั้งนะครับ
+        </p>
+      )}
+
       <button onClick={onNewOrder} style={{ color: COLORS.caramelDark }} className="text-sm font-semibold underline underline-offset-4 mt-4">
         สั่งเพิ่มอีก
       </button>
@@ -1774,10 +2138,12 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteDone, onDeleteCancelled, shopOpen, onToggleShopOpen }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onDeleteCancelled, shopOpen, onToggleShopOpen }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
-  const [confirmDeleteDone, setConfirmDeleteDone] = useState(false); // รอ confirm ลบที่เสร็จแล้วทั้งหมด
+  const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
+  const [deletePickIds, setDeletePickIds] = useState([]); // id ออร์เดอร์ที่ติ๊กเลือกไว้
+  const [confirmDeletePicked, setConfirmDeletePicked] = useState(false); // รอ confirm ลบที่เลือก
   const [confirmCancelId, setConfirmCancelId] = useState(null); // order id รอ confirm ยกเลิก
   const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกทั้งหมด
 
@@ -1794,11 +2160,12 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
   };
 
   const sorted = [...orders].sort((a, b) => b.createdAt - a.createdAt);
-  // ออร์เดอร์ที่เสร็จสิ้นจริง ๆ (จัดส่งแล้ว + รับที่ร้านที่ทำเสร็จแล้ว) — ใช้สำหรับปุ่มลบที่เสร็จแล้ว
+  // ออร์เดอร์ที่เสร็จสิ้นจริง ๆ (จัดส่งแล้ว + รับที่ร้านที่ทำเสร็จแล้ว) — รายการที่ลบได้
   // ออร์เดอร์จัดส่งที่แค่ "เสร็จแล้ว" ยังรออยู่ในคิวจัดส่ง จึงไม่นับรวม
-  const finishedCount = orders.filter(
+  const finishedOrders = orders.filter(
     (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup")
-  ).length;
+  );
+  const finishedCount = finishedOrders.length;
   const cancelledCount = orders.filter((o) => o.status === "cancelled").length;
 
   return (
@@ -1819,7 +2186,10 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           )}
           {finishedCount > 0 && (
             <button
-              onClick={() => setConfirmDeleteDone(true)}
+              onClick={() => {
+                setDeletePickOpen(true);
+                setDeletePickIds([]);
+              }}
               style={{ color: "#C0533F", border: "1px solid #E3B7AC" }}
               className="text-[11px] font-semibold px-2.5 py-1.5 rounded-full flex items-center gap-1 flex-shrink-0"
             >
@@ -1872,7 +2242,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           // ออร์เดอร์จัดส่งที่ทำเสร็จแล้วกำลังรออยู่ในคิวจัดส่ง — ระบุให้พนักงานเห็นชัดเจน
           const metaLabel =
             order.status === "done" && order.method !== "pickup" ? "เสร็จแล้ว · รอจัดส่ง" : meta.label;
-          const total = order.items.reduce((s, i) => s + i.price * i.qty, 0);
+          const total = calcOrderTotal(order); // ยอดรวมหลังหักส่วนลดโค้ด (ถ้ามี)
           return (
             <div
               key={order.id}
@@ -1984,8 +2354,15 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   </span>
                 </button>
               )}
-              <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="flex items-center justify-between pt-2.5 mt-1">
-                <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
+              <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-2.5 mt-1">
+                {order.discount && Number(order.discount.baht) > 0 && (
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลดโค้ด {order.discount.code || ""}</span>
+                    <span style={{ color: COLORS.sage }} className="font-semibold">-฿{order.discount.baht}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
                 {meta.action && (
                   <button
                     onClick={() => advance(order.id)}
@@ -1995,6 +2372,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     {meta.action}
                   </button>
                 )}
+                </div>
               </div>
             </div>
           );
@@ -2037,10 +2415,113 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       )}
 
-      {/* ยืนยันก่อนลบที่เสร็จแล้วทั้งหมด */}
-      {confirmDeleteDone && (
+      {/* ชีตติ๊กเลือกออร์เดอร์ที่เสร็จแล้วเพื่อลบทีละรายการ — กันกดลบทั้งก้อนพลาด */}
+      {deletePickOpen && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end">
+          <div onClick={() => setDeletePickOpen(false)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
+            <div className="flex items-center justify-between mb-1">
+              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+                เลือกออร์เดอร์ที่ต้องการลบ
+              </h2>
+              <button onClick={() => setDeletePickOpen(false)} style={{ color: COLORS.inkSoft }}>
+                <X size={20} />
+              </button>
+            </div>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-2">
+              ติ๊กเฉพาะรายการที่เสร็จสิ้นแล้วและอยากลบ ({finishedCount} รายการที่ลบได้)
+            </p>
+            <button
+              onClick={() => {
+                setDeletePickIds((prev) =>
+                  prev.length === finishedOrders.length && finishedOrders.length > 0
+                    ? []
+                    : finishedOrders.map((o) => o.id)
+                );
+              }}
+              style={{ color: COLORS.caramelDark }}
+              className="text-xs font-semibold self-start mb-2"
+            >
+              {deletePickIds.length === finishedOrders.length && finishedOrders.length > 0
+                ? "ไม่เลือกทั้งหมด"
+                : "เลือกทั้งหมด"}
+            </button>
+
+            <div className="overflow-y-auto space-y-2 pb-3">
+              {finishedOrders.map((order) => {
+                const checked = deletePickIds.includes(order.id);
+                const total = calcOrderTotal(order);
+                return (
+                  <button
+                    key={order.id}
+                    onClick={() =>
+                      setDeletePickIds((prev) =>
+                        checked ? prev.filter((id) => id !== order.id) : [...prev, order.id]
+                      )
+                    }
+                    style={{
+                      background: "#FFFFFF",
+                      border: `1.5px solid ${checked ? COLORS.caramel : COLORS.line}`,
+                    }}
+                    className="w-full rounded-2xl px-4 py-3 flex items-center gap-3 text-left"
+                  >
+                    <div
+                      style={{
+                        border: `2px solid ${checked ? COLORS.caramel : COLORS.line}`,
+                        background: checked ? COLORS.caramel : "transparent",
+                      }}
+                      className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+                    >
+                      {checked && <Check size={12} color="#fff" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
+                        #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
+                      </p>
+                      <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
+                        {order.method === "pickup"
+                          ? "รับที่ร้าน"
+                          : order.deliveryDate && order.deliveryTime
+                          ? `จัดส่ง ${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`
+                          : "จัดส่ง"}{" "}
+                        · ฿{total}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ borderTop: `1px solid ${COLORS.line}` }} className="pt-3 mt-1 flex gap-2">
+              <button
+                onClick={() => setDeletePickOpen(false)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-3 text-sm font-semibold"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  if (deletePickIds.length > 0) setConfirmDeletePicked(true);
+                }}
+                disabled={deletePickIds.length === 0}
+                style={{
+                  background: deletePickIds.length > 0 ? "#C0533F" : "#D8C9B8",
+                  color: "#FFF9F0",
+                }}
+                className="flex-1 rounded-xl py-3 text-sm font-semibold disabled:cursor-not-allowed"
+              >
+                ลบ {deletePickIds.length} รายการ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันลบออร์เดอร์ที่ติ๊กเลือกไว้ */}
+      {confirmDeletePicked && (
         <div
-          onClick={() => setConfirmDeleteDone(false)}
+          onClick={() => setConfirmDeletePicked(false)}
           style={{ background: "rgba(20,14,8,0.55)" }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
         >
@@ -2050,23 +2531,30 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
             className="w-full max-w-sm rounded-2xl p-5"
           >
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">
-              ลบออร์เดอร์ที่เสร็จแล้วทั้งหมด {doneCount} รายการเลยไหม?
+              ลบ {deletePickIds.length} รายการที่เลือกเลยไหม?
             </p>
-            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">ลบแล้วกู้คืนไม่ได้ (ไม่กระทบออร์เดอร์ใหม่/กำลังทำ)</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              ลบแล้วกู้คืนไม่ได้ (ไม่กระทบออร์เดอร์ใหม่/กำลังทำ/รอจัดส่ง)
+            </p>
             <div className="flex gap-2">
               <button
-                onClick={() => setConfirmDeleteDone(false)}
+                onClick={() => setConfirmDeletePicked(false)}
                 style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
                 ยกเลิก
               </button>
               <button
-                onClick={() => { onDeleteDone(); setConfirmDeleteDone(false); }}
+                onClick={() => {
+                  onDeleteOrders(deletePickIds);
+                  setConfirmDeletePicked(false);
+                  setDeletePickOpen(false);
+                  setDeletePickIds([]);
+                }}
                 style={{ background: "#C0533F", color: "#FFF9F0" }}
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
-                ลบทั้งหมด
+                ลบเลย
               </button>
             </div>
           </div>
@@ -2208,7 +2696,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
           <div className="space-y-2.5">
             {pickups.map((order) => {
               const meta = statusMeta[order.status];
-              const total = order.items.reduce((s, i) => s + i.price * i.qty, 0);
+              const total = calcOrderTotal(order);
               return (
                 <div
                   key={order.id}
@@ -2244,7 +2732,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
           <div className="space-y-2.5">
             {groupsByDate[dateK].map((order) => {
               const meta = statusMeta[order.status];
-              const total = order.items.reduce((s, i) => s + i.price * i.qty, 0);
+              const total = calcOrderTotal(order);
               return (
                 <div
                   key={order.id}
@@ -2298,7 +2786,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
           <div className="space-y-2.5">
             {unscheduled.map((order) => {
               const meta = statusMeta[order.status];
-              const total = order.items.reduce((s, i) => s + i.price * i.qty, 0);
+              const total = calcOrderTotal(order);
               return (
                 <div
                   key={order.id}
@@ -2342,6 +2830,540 @@ function StaffDeliveryView({ orders, onAdvance }) {
 // สรุปยอดขายให้พนักงาน/เจ้าของร้านดูภาพรวม: ยอดขายรวม, ขายเมนูไหนดี,
 // และตัวเลือกเสริม (เช่น แยกน้ำแข็ง/เพิ่มท็อปปิ้ง) ถูกเลือกกี่ครั้ง
 // นับจาก "ออร์เดอร์ที่เข้ามา" ทั้งหมดในช่วงเวลาที่เลือก (ทุกสถานะ ไม่ว่าจะใหม่/กำลังทำ/เสร็จแล้ว)
+// ================= STAFF: จัดการโปรโมชั่น =================
+// ประเภท: discount = ลดราคาเมนู (ตามเมนูที่เลือก หรือทุกเมนู) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด
+// โครงสร้าง: { id, name, type, active, discountPercent, itemIds ([] = ทุกเมนู), addOnIds, code }
+function StaffPromoView({ promos, updatePromos, menu }) {
+  const [editing, setEditing] = useState(null); // id ของโปรโมชั่นที่กำลังแก้ หรือ "new"
+  const [confirmDelete, setConfirmDelete] = useState(null); // id ที่รอยืนยันลบ
+  const [form, setForm] = useState({
+    name: "",
+    type: "discount", // discount | freeAddOn | code
+    active: true,
+    discountPercent: "",
+    itemIds: [],
+    addOnIds: [],
+    code: "",
+  });
+
+  const startNew = () => {
+    setEditing("new");
+    setConfirmDelete(null);
+    setForm({ name: "", type: "discount", active: true, discountPercent: "", itemIds: [], addOnIds: [], code: "" });
+  };
+
+  const startEdit = (p) => {
+    setEditing(p.id);
+    setConfirmDelete(null);
+    setForm({
+      name: p.name || "",
+      type: p.type || "discount",
+      active: p.active !== false,
+      discountPercent: String(p.discountPercent || ""),
+      // กัน itemIds ที่เมนูถูกลบไปแล้วค้างอยู่
+      itemIds: (p.itemIds || []).filter((id) => menu.some((m) => m.id === id)),
+      addOnIds: p.addOnIds || [],
+      code: p.code || "",
+    });
+  };
+
+  const toggleId = (arr, id) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id]);
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    if (form.type === "code" && !form.code.trim()) return;
+    const percent = Number(form.discountPercent);
+    const promo = {
+      id: editing === "new" ? nextId() : editing,
+      name: form.name.trim(),
+      type: form.type,
+      active: form.active,
+      discountPercent:
+        (form.type === "discount" || form.type === "code") && Number.isFinite(percent) && percent > 0 ? percent : 0,
+      itemIds: form.type === "code" ? [] : form.itemIds,
+      addOnIds: form.type === "freeAddOn" ? form.addOnIds : [],
+      code: form.type === "code" ? form.code.trim().toUpperCase() : "",
+    };
+    updatePromos((prev) => (editing === "new" ? [...prev, promo] : prev.map((p) => (p.id === editing ? promo : p))));
+    setEditing(null);
+  };
+
+  const remove = (id) => {
+    updatePromos((prev) => prev.filter((p) => p.id !== id));
+    if (editing === id) setEditing(null);
+    setConfirmDelete(null);
+  };
+
+  const toggleActive = (id) => {
+    updatePromos((prev) => prev.map((p) => (p.id === id ? { ...p, active: !p.active } : p)));
+  };
+
+  // ตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) ทั้งหมดของเมนูที่เลือกไว้ — ใช้ตอนเลือก "ท็อปปิ้งฟรี"
+  const availableAddOns = useMemo(() => {
+    const items = form.itemIds.length === 0 ? menu : menu.filter((m) => form.itemIds.includes(m.id));
+    const out = [];
+    items.forEach((m) => {
+      (m.addOns || []).forEach((g) => {
+        (g.options || []).forEach((o) => {
+          out.push({ menuId: m.id, menuName: m.name, id: o.id, name: o.name, price: Number(o.price) || 0 });
+        });
+      });
+    });
+    return out;
+  }, [menu, form.itemIds]);
+
+  // สรุปเงื่อนไขของโปรโมชั่นสำหรับแสดงในการ์ด
+  const describe = (p) => {
+    const target = !p.itemIds || p.itemIds.length === 0 ? "ทุกเมนู" : `เฉพาะ ${p.itemIds.length} เมนู`;
+    if (p.type === "discount") return `ลด ${p.discountPercent}% · ${target}`;
+    if (p.type === "code") return `โค้ด “${p.code}” · ลด ${p.discountPercent}% จากยอดรวม`;
+    return `ตัวเลือกฟรี ${(p.addOnIds || []).length} รายการ · ${target}`;
+  };
+
+  const typeColor = (t) => (t === "discount" ? COLORS.caramelDark : t === "freeAddOn" ? COLORS.sage : "#8A5A44");
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <div className="flex items-center justify-between mb-1">
+        <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold">
+          โปรโมชั่น
+        </h1>
+        <button
+          onClick={startNew}
+          style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+          className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+        >
+          <Plus size={14} /> เพิ่มโปรโมชั่น
+        </button>
+      </div>
+      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+        ลดราคาเมนู · ท็อปปิ้งฟรี · โค้ดส่วนลด — ลูกค้าเห็นผลทันทีทุกเครื่อง
+      </p>
+
+      {promos.length === 0 && (
+        <div style={{ background: "#FFFFFF", border: `1px dashed ${COLORS.line}` }} className="rounded-2xl p-6 text-center">
+          <ShoppingBag size={28} className="mx-auto mb-2 opacity-40" style={{ color: COLORS.caramelDark }} />
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold">ยังไม่มีโปรโมชั่น</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mt-1">กด "เพิ่มโปรโมชั่น" เพื่อเริ่ม เช่น ลด 10% ชาไทยเย็น หรือแถมไข่มุกฟรี</p>
+        </div>
+      )}
+
+      <div className="space-y-2.5">
+        {promos.map((p) => (
+          <div
+            key={p.id}
+            style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: p.active ? 1 : 0.55 }}
+            className="rounded-2xl p-3.5"
+          >
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span style={{ background: COLORS.peachSoft, color: typeColor(p.type) }} className="text-[11px] font-bold px-2 py-0.5 rounded-full">
+                {PROMO_TYPE_LABEL[p.type] || p.type}
+              </span>
+              <button onClick={() => toggleActive(p.id)} className="flex-shrink-0">
+                <Chip tone={p.active ? "sage" : "caramel"}>{p.active ? "เปิดใช้" : "ปิดใช้"}</Chip>
+              </button>
+            </div>
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{p.name}</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">{describe(p)}</p>
+            <div className="flex items-center justify-end gap-3 mt-2 pt-2" style={{ borderTop: `1px solid ${COLORS.line}` }}>
+              <button onClick={() => startEdit(p)} style={{ color: COLORS.inkSoft }} className="text-xs font-semibold flex items-center gap-1">
+                <Pencil size={13} /> แก้ไข
+              </button>
+              <button onClick={() => setConfirmDelete(p.id)} style={{ color: "#C0533F" }} className="text-xs font-semibold flex items-center gap-1">
+                <Trash2 size={13} /> ลบ
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ยืนยันลบ */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center px-8">
+          <div onClick={() => setConfirmDelete(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
+            <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ลบโปรโมชั่นนี้เลยไหม?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              {promos.find((p) => p.id === confirmDelete)?.name} — ลูกค้าจะเห็นราคาปกติทันที
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="flex-1 text-xs font-semibold py-2.5 rounded-xl bg-white"
+              >
+                ยกเลิก
+              </button>
+              <button onClick={() => remove(confirmDelete)} style={{ background: "#C0533F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
+                ลบโปรโมชั่น
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ฟอร์มเพิ่ม/แก้ไข */}
+      {editing && (
+        <div className="fixed inset-0 z-20 flex flex-col justify-end">
+          <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
+          {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
+          <div
+            style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }}
+            className="relative rounded-t-[28px] p-5 pb-8"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+                {editing === "new" ? "เพิ่มโปรโมชั่นใหม่" : "แก้ไขโปรโมชั่น"}
+              </h2>
+              <button onClick={() => setEditing(null)} style={{ color: COLORS.inkSoft }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อโปรโมชั่น</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="เช่น ลด 10% ชาไทยเย็น / ไข่มุกฟรี / โค้ด SAVE10"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none focus:ring-2"
+                />
+              </div>
+
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ประเภท</label>
+                <div className="flex gap-2">
+                  {[
+                    { key: "discount", label: "ลดราคาเมนู" },
+                    { key: "freeAddOn", label: "ท็อปปิ้งฟรี" },
+                    { key: "code", label: "โค้ดส่วนลด" },
+                  ].map((t) => (
+                    <button
+                      key={t.key}
+                      onClick={() => setForm((f) => ({ ...f, type: t.key }))}
+                      style={{
+                        background: form.type === t.key ? COLORS.caramel : "#FFFFFF",
+                        color: form.type === t.key ? "#FFF9F0" : COLORS.inkSoft,
+                        border: `1px solid ${form.type === t.key ? COLORS.caramel : COLORS.line}`,
+                      }}
+                      className="flex-1 px-2 py-2 rounded-xl text-xs font-medium leading-tight"
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {(form.type === "discount" || form.type === "code") && (
+                <div>
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
+                    % ลด (เช่น 10 = ลด 10%)
+                  </label>
+                  <input
+                    value={form.discountPercent}
+                    onChange={(e) => setForm((f) => ({ ...f, discountPercent: e.target.value.replace(/[^0-9]/g, "") }))}
+                    placeholder="10"
+                    inputMode="numeric"
+                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                  />
+                </div>
+              )}
+
+              {form.type === "code" && (
+                <div>
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
+                    โค้ดส่วนลด (ลูกค้ากรอกที่หน้าชำระเงิน)
+                  </label>
+                  <input
+                    value={form.code}
+                    onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
+                    placeholder="เช่น SAVE10"
+                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none uppercase"
+                  />
+                </div>
+              )}
+
+              {form.type !== "code" && (
+                <div>
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ใช้กับเมนูไหน</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      onClick={() => setForm((f) => ({ ...f, itemIds: [] }))}
+                      style={{
+                        background: form.itemIds.length === 0 ? COLORS.caramel : "#FFFFFF",
+                        color: form.itemIds.length === 0 ? "#FFF9F0" : COLORS.inkSoft,
+                        border: `1px solid ${form.itemIds.length === 0 ? COLORS.caramel : COLORS.line}`,
+                      }}
+                      className="px-3 py-1.5 rounded-full text-xs font-medium"
+                    >
+                      ทุกเมนู
+                    </button>
+                    {menu.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => setForm((f) => ({ ...f, itemIds: toggleId(f.itemIds, m.id) }))}
+                        style={{
+                          background: form.itemIds.includes(m.id) ? COLORS.peachSoft : "#FFFFFF",
+                          color: form.itemIds.includes(m.id) ? COLORS.caramelDark : COLORS.inkSoft,
+                          border: `1px solid ${form.itemIds.includes(m.id) ? COLORS.caramel : COLORS.line}`,
+                        }}
+                        className="px-3 py-1.5 rounded-full text-xs font-medium"
+                      >
+                        {m.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {form.type === "freeAddOn" && (
+                <div>
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">
+                    ตัวเลือกที่จะให้ฟรี
+                    {form.itemIds.length === 0 && menu.length > 0 && " (ทุกเมนู)"}
+                  </label>
+                  {availableAddOns.length === 0 ? (
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                      เมนูที่เลือกยังไม่มีตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) — ไปเพิ่มที่หน้าจัดการเมนูก่อน หรือเลือกเมนูอื่น
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {availableAddOns.map((o) => (
+                        <button
+                          key={`${o.menuId}::${o.id}`}
+                          onClick={() => setForm((f) => ({ ...f, addOnIds: toggleId(f.addOnIds, o.id) }))}
+                          style={{
+                            background: form.addOnIds.includes(o.id) ? COLORS.sage : "#FFFFFF",
+                            color: form.addOnIds.includes(o.id) ? "#FFF9F0" : COLORS.inkSoft,
+                            border: `1px solid ${form.addOnIds.includes(o.id) ? COLORS.sage : COLORS.line}`,
+                          }}
+                          className="px-3 py-1.5 rounded-full text-xs font-medium"
+                        >
+                          {o.name} ({o.menuName}) · ฿{o.price}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <button onClick={() => setForm((f) => ({ ...f, active: !f.active }))} className="flex items-center gap-2">
+                  <span
+                    style={{ background: form.active ? COLORS.sage : "#D8CBB8", width: 40, height: 22, borderRadius: 999 }}
+                    className="relative inline-block"
+                  >
+                    <span
+                      style={{ left: form.active ? 20 : 3, background: "#FFF", width: 16, height: 16, borderRadius: 999 }}
+                      className="absolute top-[3px] transition-all"
+                    />
+                  </span>
+                  <span style={{ color: COLORS.ink }} className="text-sm font-medium">
+                    {form.active ? "เปิดใช้ (ลูกค้าเห็นทันที)" : "ปิดใช้ (ลูกค้ายังไม่เห็น)"}
+                  </span>
+                </button>
+              </div>
+
+              <button
+                onClick={save}
+                disabled={!form.name.trim() || (form.type === "code" && !form.code.trim())}
+                style={{
+                  background: COLORS.ink,
+                  color: "#FFF9F0",
+                  opacity: !form.name.trim() || (form.type === "code" && !form.code.trim()) ? 0.4 : 1,
+                }}
+                className="w-full py-3 rounded-2xl text-sm font-bold mt-1"
+              >
+                {editing === "new" ? "เพิ่มโปรโมชั่น" : "บันทึกการแก้ไข"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================= STAFF: จัดการสิทธิ์พนักงาน =================
+// เฉพาะเครื่องที่ได้รับสิทธิ์แล้วเท่านั้นที่เข้าได้ — เพิ่ม/ลบสิทธิ์เครื่องพนักงานได้ที่นี่
+// (rules บังคับว่าเขียน/อ่านรายชื่อได้เฉพาะคนที่อยู่ใน staffUids อยู่แล้ว)
+function StaffMembersView({ uid, staffMembers, onAdd, onRemove }) {
+  const [newUid, setNewUid] = useState("");
+  const [formError, setFormError] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [uidCopied, setUidCopied] = useState(false);
+
+  const add = () => {
+    const v = newUid.trim();
+    if (!v) return;
+    if (staffMembers.includes(v)) {
+      setFormError("เครื่องนี้ได้รับสิทธิ์อยู่แล้ว");
+      return;
+    }
+    // กันพิมพ์ผิด/วางรหัสปลอม — รหัสอุปกรณ์จริงเป็นตัวอักษร-ตัวเลขล้วน ไม่มีสัญลักษณ์พิเศษ
+    if (/[^A-Za-z0-9]/.test(v)) {
+      setFormError("รหัสอุปกรณ์ไม่ถูกต้อง — ให้คัดลอกจากจอ \"เครื่องนี้ยังไม่ได้รับสิทธิ์\" ของเครื่องนั้นมาตรง ๆ");
+      return;
+    }
+    onAdd(v);
+    setNewUid("");
+    setFormError("");
+  };
+
+  const remove = (v) => {
+    onRemove(v);
+    setConfirmRemove(null);
+  };
+
+  const copyUid = async () => {
+    if (!uid) return;
+    try {
+      await navigator.clipboard.writeText(uid);
+      setUidCopied(true);
+      setTimeout(() => setUidCopied(false), 2000);
+    } catch (err) {
+      console.error("Copy uid failed:", err);
+    }
+  };
+
+  // ลบได้เฉพาะเครื่องอื่น และต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออกทั้งร้าน)
+  const canDelete = (v) => v !== uid && staffMembers.length > 1;
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+        สิทธิ์พนักงาน
+      </h1>
+      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+        เครื่องไหนได้รับอนุญาตให้เข้าหน้าพนักงานได้ — เพิ่ม/ลบได้ที่นี่ ซิงก์กับ Firebase ทันที
+      </p>
+
+      {/* เครื่องที่ใช้อยู่ */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5 mb-4">
+        <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">รหัสอุปกรณ์เครื่องนี้</p>
+        <div className="flex gap-2 items-stretch">
+          <div
+            style={{ background: COLORS.cream, border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-xs font-mono break-all select-all"
+          >
+            {uid}
+          </div>
+          <button
+            type="button"
+            onClick={copyUid}
+            style={{ background: uidCopied ? COLORS.sageSoft : COLORS.peachSoft, color: uidCopied ? COLORS.sage : COLORS.caramelDark }}
+            className="rounded-xl px-3.5 text-xs font-semibold flex-shrink-0"
+          >
+            {uidCopied ? "คัดลอกแล้ว" : "คัดลอก"}
+          </button>
+        </div>
+        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
+          เครื่องนี้คือเครื่องที่กำลังใช้อยู่ — ใช้รหัสนี้เป็นตัวอย่างว่าเครื่องใหม่ต้องส่งรหัสอะไรให้เพิ่มสิทธิ์
+        </p>
+      </div>
+
+      {/* เพิ่มสิทธิ์ */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5 mb-4">
+        <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">เพิ่มสิทธิ์เครื่องใหม่</p>
+        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-2 leading-relaxed">
+          ให้เครื่องนั้นเปิดลิงก์พนักงาน (?staff=1) → ใส่ PIN → หน้า "เครื่องนี้ยังไม่ได้รับสิทธิ์" จะโชว์รหัสอุปกรณ์
+          → คัดลอกมาวางตรงนี้ แล้วกดเพิ่มสิทธิ์ (ทำครั้งเดียวต่อเครื่อง)
+        </p>
+        <div className="flex gap-2 items-stretch">
+          <input
+            value={newUid}
+            onChange={(e) => { setNewUid(e.target.value); setFormError(""); }}
+            placeholder="วางรหัสอุปกรณ์ที่นี่"
+            style={{ border: `1px solid ${formError ? "#C0533F" : COLORS.line}`, color: COLORS.ink }}
+            className="flex-1 min-w-0 rounded-xl px-3.5 py-2.5 text-xs font-mono bg-white outline-none"
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={!newUid.trim()}
+            style={{ background: COLORS.caramel, color: "#FFF9F0", opacity: newUid.trim() ? 1 : 0.4 }}
+            className="rounded-xl px-4 text-xs font-semibold flex-shrink-0"
+          >
+            เพิ่มสิทธิ์
+          </button>
+        </div>
+        {formError && <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{formError}</p>}
+      </div>
+
+      {/* รายชื่อเครื่องพนักงาน */}
+      <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
+        เครื่องที่ได้รับสิทธิ์ ({staffMembers.length})
+      </p>
+      <div className="space-y-2">
+        {staffMembers.length === 0 && (
+          <p style={{ color: COLORS.inkSoft }} className="text-xs px-1">
+            กำลังโหลดรายชื่อ... (ถ้าไม่ขึ้น ให้ตรวจว่าเครื่องนี้ถูกเพิ่มสิทธิ์ใน Firebase แล้ว)
+          </p>
+        )}
+        {staffMembers.map((v) => (
+          <div key={v} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-3 flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <p style={{ color: COLORS.ink }} className="text-xs font-mono break-all">{v}</p>
+              {v === uid && (
+                <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1">
+                  เครื่องนี้
+                </span>
+              )}
+            </div>
+            {canDelete(v) ? (
+              <button
+                type="button"
+                onClick={() => setConfirmRemove(v)}
+                style={{ color: "#C0533F" }}
+                className="text-xs font-semibold px-2 py-1.5 flex-shrink-0"
+              >
+                ลบ
+              </button>
+            ) : (
+              <span
+                title={v === uid ? "ลบเครื่องที่ใช้อยู่ไม่ได้ — ใช้เครื่องอื่นลบแทน" : "ต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออก)"}
+                style={{ color: "#B9A88F" }}
+                className="text-xs px-2 py-1.5 flex-shrink-0"
+              >
+                ลบไม่ได้
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ยืนยันลบสิทธิ์ */}
+      {confirmRemove && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center px-8">
+          <div onClick={() => setConfirmRemove(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
+            <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ลบสิทธิ์เครื่องนี้เลยไหม?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4 break-all">
+              {confirmRemove} — เครื่องนั้นจะเข้าหน้าพนักงานไม่ได้ทันที
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmRemove(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="flex-1 text-xs font-semibold py-2.5 rounded-xl bg-white"
+              >
+                ยกเลิก
+              </button>
+              <button onClick={() => remove(confirmRemove)} style={{ background: "#C0533F", color: "#FFF" }} className="flex-1 text-xs font-semibold py-2.5 rounded-xl">
+                ลบสิทธิ์
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StaffDashboardView({ orders }) {
   const [range, setRange] = useState("today"); // today | 7d | 30d | all
   const [expandedKey, setExpandedKey] = useState(null);
@@ -2390,10 +3412,7 @@ function StaffDashboardView({ orders }) {
     return [...map.values()].sort((a, b) => b.revenue - a.revenue);
   }, [soldOrders]);
 
-  const totalRevenue = soldOrders.reduce(
-    (sum, o) => sum + (o.items || []).reduce((s, i) => s + i.price * i.qty, 0),
-    0
-  );
+  const totalRevenue = soldOrders.reduce((sum, o) => sum + calcOrderTotal(o), 0);
   const totalOrders = soldOrders.length;
   const totalItemsSold = menuStats.reduce((s, m) => s + m.qty, 0);
   const maxRevenue = menuStats.length ? menuStats[0].revenue : 0;
@@ -2517,6 +3536,8 @@ function App() {
   // เมนูเริ่มต้นเป็น [] เมื่อเปิด sync — อย่าใช้ initialMenu (รูป stock จากลิงก์ Unsplash) ขึ้นก่อน
   // เดิมตอนโหลดหน้าครั้งแรกจะเห็นรูปที่เป็นลิงก์สต็อก แทนรูปจริงที่ร้านอัปโหลด จนกว่า Firestore จะตอบกลับมา
   const [menu, setMenu] = useState(FIREBASE_SYNC_ENABLED ? [] : initialMenu);
+  const [promos, setPromos] = useState([]); // โปรโมชั่น — ซิงก์ผ่าน Firestore (config/promotions) เหมือนเมนู
+  const [staffMembers, setStaffMembers] = useState([]); // รายชื่อ uid ที่ได้รับสิทธิ์พนักงาน (staffUids)
   const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
   const [cart, setCart] = useState([]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
@@ -2526,6 +3547,7 @@ function App() {
   const [lastOrderNo, setLastOrderNo] = useState(null);
   const [lastPaymentMethod, setLastPaymentMethod] = useState(null);
   const [lastCustomer, setLastCustomer] = useState(null); // { name, houseNo } of the most recent order
+  const [lastOrder, setLastOrder] = useState(null); // ออร์เดอร์ล่าสุดเต็มใบ — ใช้สร้างภาพหลักฐานการรับสินค้า
 
   // Staff access: only reachable via a link with ?staff=1, and only after a PIN.
   // Regular customers opening the shop link never see this — the switcher below
@@ -2534,7 +3556,9 @@ function App() {
   const [staffUnlocked, setStaffUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState(false);
-  const [showUidScreen, setShowUidScreen] = useState(false); // จอโชว์รหัสอุปกรณ์ให้พนักงานอ่านบอกเจ้าของร้าน
+  const [staffChecking, setStaffChecking] = useState(false); // กำลังตรวจสอบสิทธิ์ใน staffUids (ต้องได้รับสิทธิ์จากเจ้าของร้านก่อน)
+  const [staffDenied, setStaffDenied] = useState(false); // เครื่องนี้ยังไม่ได้รับสิทธิ์เข้าหน้าพนักงาน
+  const [staffCheckError, setStaffCheckError] = useState(false); // ตรวจสอบสิทธิ์ไม่สำเร็จ (เน็ต / rules ยังไม่ได้อัปเดต)
   const [uidCopied, setUidCopied] = useState(false);
   const [uid, setUid] = useState(null); // ทุกคนที่เปิดแอป (ลูกค้า/พนักงาน) ได้ uid นิรนามจาก Firebase Auth (เฉพาะตอนเปิด sync)
 
@@ -2556,12 +3580,44 @@ function App() {
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("staff") === "1") setIsStaffLink(true);
-    } catch (e) {
+      if (params.get("staff") === "1") setIsStaffLink(true);    } catch (e) {
       // no-op — if URL isn't accessible for some reason, just stay in customer mode
     }
   }, []);
 
+  // ตรวจสอบว่าเครื่องนี้ได้รับสิทธิ์เป็นพนักงานแล้วหรือยัง — อ่านเฉพาะเอกสาร staffUids/{uid ของตัวเอง}
+  // (rules เปิด read ให้เฉพาะ uid ตัวเอง → ไม่เปิดเผยรายชื่อพนักงานทั้งหมดให้ลูกค้าเห็น)
+  // ถ้ายังไม่มีสิทธิ์ จะเข้าหน้าพนักงานไม่ได้เลย ต้องให้เจ้าของร้านเพิ่ม uid ใน Firebase Console ก่อน
+  const checkStaffAccess = async () => {
+    if (!FIREBASE_SYNC_ENABLED) {
+      // โหมดออฟไลน์ (เปิดไฟล์เองในเครื่อง) — ไม่มี Firestore ให้ตรวจ ปลดล็อกตรง ๆ
+      setStaffUnlocked(true);
+      setRole("staff-orders");
+      return;
+    }
+    if (!uid) throw new Error("ยังไม่พร้อมตรวจสิทธิ์ (uid ว่าง)"); // จริง ๆ ปุ่มเข้าสู่ระบบจะกดไม่ได้จนกว่า auth เสร็จ
+    const doc = await db.collection("staffUids").doc(uid).get();
+    if (doc.exists) {
+      setStaffUnlocked(true);
+      setRole("staff-orders");
+    } else {
+      setStaffDenied(true);
+    }
+  };
+
+  const runStaffCheck = async () => {
+    setStaffChecking(true);
+    setStaffDenied(false);
+    setStaffCheckError(false);
+    try {
+      await checkStaffAccess();
+    } catch (err) {
+      console.error("ตรวจสอบสิทธิ์พนักงานไม่สำเร็จ:", err);
+      setStaffCheckError(true);
+    } finally {
+      setStaffChecking(false);
+    }
+  };
 
   const handlePinSubmit = async (e) => {
     e.preventDefault();
@@ -2570,22 +3626,7 @@ function App() {
       return;
     }
     setPinError(false);
-    if (FIREBASE_SYNC_ENABLED) {
-      // หมายเหตุ: เดิมตรงนี้เคยเขียน staffUids/{uid} เองจาก client — เป็นช่องโหว่
-      // (ใครก็เขียนเองได้โดยไม่ต้องรู้ PIN เลย เพราะทุกคนมี anonymous auth อยู่แล้ว)
-      // ตอนนี้สิทธิ์ staff ต้องให้เจ้าของร้านเพิ่ม uid เองผ่าน Firebase Console เท่านั้น —
-      // เลยแค่โชว์รหัส uid ของเครื่องนี้ให้พนักงานอ่าน แล้วไปบอกเจ้าของร้าน
-      setShowUidScreen(true);
-    } else {
-      setStaffUnlocked(true);
-      setRole("staff-orders");
-    }
-  };
-
-  const proceedToStaff = () => {
-    setShowUidScreen(false);
-    setStaffUnlocked(true);
-    setRole("staff-orders"); // เข้าหน้าออร์เดอร์ร้านทันที (ถ้ายังไม่ได้รับสิทธิ์จริง Firestore จะบล็อกการอ่าน/แก้ไขไว้เอง)
+    await runStaffCheck();
   };
 
   const copyUid = async () => {
@@ -2677,6 +3718,31 @@ function App() {
     return unsubscribe;
   }, []);
 
+  // ฟังโปรโมชั่นจาก Firestore แบบเดียวกับเมนู — พนักงานแก้โปรโมชั่นแล้วลูกค้าทุกเครื่องเห็นทันที
+  // (ลูกค้าจะเห็นราคาหลังลด/ท็อปปิ้งฟรี/รับโค้ดส่วนลดโดยอัตโนมัติ)
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("promotions")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && Array.isArray(doc.data().items)) {
+            setPromos(doc.data().items);
+          } else {
+            // ยังไม่เคยสร้างเอกสาร — แสดงว่าไม่มีโปรโมชั่น (เอกสารจะถูกสร้างเองตอนพนักงานกดบันทึกครั้งแรก)
+            // หมายเหตุ: ไม่สร้างเอกสารว่างที่นี่ เพราะเครื่องที่ไม่มีสิทธิ์เขียนจะวนลูป (เขียนพลาด -> ฟังซ้ำ -> เขียนอีก)
+            // และการฟังซ้ำทุกครั้งจะ setPromos([]) ทับข้อมูลที่พนักงานเพิ่งบันทึกในเครื่องนั้น
+            setPromos([]);
+          }
+        },
+        (err) => {
+          console.error("Firestore promotions subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
   // ฟังสถานะเปิด/ปิดร้านจาก Firestore แบบเดียวกับเมนู — ทุกเครื่อง (ลูกค้า+พนักงาน)
   // เห็นสถานะเดียวกันแบบเรียลไทม์ พนักงานกดปิดร้านจากเครื่องไหนก็ได้ ลูกค้าทุกคนเห็นทันที
   useEffect(() => {
@@ -2713,6 +3779,51 @@ function App() {
     }
   };
 
+  // เขียนโปรโมชั่นกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ — ใช้จาก StaffPromoView
+  const updatePromos = (updater) => {
+    setPromos((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config").doc("promotions").set({ items: next }).catch((err) => {
+          console.error("บันทึกโปรโมชั่นขึ้น Firestore ไม่สำเร็จ:", err);
+        });
+      }
+      return next;
+    });
+  };
+
+  // รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids) — ซิงก์แบบเรียลไทม์:
+  // เพิ่มสิทธิ์เครื่องใหม่จากเครื่องไหนแล้ว ทุกเครื่องเห็นอัปเดตทันที (เฉพาะตอนปลดล็อกแล้ว)
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED || !staffUnlocked) return;
+    const unsubscribe = db
+      .collection("staffUids")
+      .onSnapshot(
+        (snap) => setStaffMembers(snap.docs.map((d) => d.id)),
+        (err) => console.error("Firestore staffUids subscription failed:", err)
+      );
+    return unsubscribe;
+  }, [staffUnlocked]);
+
+  // เพิ่มสิทธิ์พนักงานให้เครื่องใหม่ — เขียนเอกสาร staffUids/{uid}
+  // (rules บังคับว่าต้องเป็นพนักงานที่มีสิทธิ์อยู่แล้วเท่านั้นถึงเขียนได้)
+  const addStaffUid = (targetUid) => {
+    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
+    db.collection("staffUids")
+      .doc(targetUid)
+      .set({ addedAt: Date.now() })
+      .catch((err) => console.error("เพิ่มสิทธิ์พนักงานไม่สำเร็จ:", err));
+  };
+
+  // ลบสิทธิ์พนักงาน — เครื่องนั้นจะเข้าหน้าพนักงานไม่ได้ทันที
+  const removeStaffUid = (targetUid) => {
+    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
+    db.collection("staffUids")
+      .doc(targetUid)
+      .delete()
+      .catch((err) => console.error("ลบสิทธิ์พนักงานไม่สำเร็จ:", err));
+  };
+
   // เขียนเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/เปิดปิดขาย)
   // ห่อ setMenu เดิมไว้ชั้นหนึ่ง — MenuManagerView เรียกใช้เหมือนเดิมทุกอย่าง ไม่ต้องแก้โค้ดฝั่งนั้น
   const updateMenu = (updater) => {
@@ -2727,7 +3838,7 @@ function App() {
     });
   };
 
-  const placeOrder = async (paymentMethod, slip, customer) => {
+  const placeOrder = async (paymentMethod, slip, customer, discount) => {
     // เลขออร์เดอร์แบบง่าย ๆ จากเลขท้ายเวลา — เหมาะกับร้านเล็กที่ออร์เดอร์ไม่ถี่มาก
     // ถ้าจะการันตีไม่ซ้ำ 100% ในระบบจริง ควรทำ counter แยกด้วย Firestore transaction
     const orderNo = Number(String(Date.now()).slice(-4));
@@ -2743,6 +3854,7 @@ function App() {
       createdAt: Date.now(),
       paymentMethod,
       slip: slip || null,
+      discount: discount || null, // { code, percent, baht } — ส่วนลดจากโค้ด (ถ้ามี)
     };
     if (FIREBASE_SYNC_ENABLED) {
       try {
@@ -2750,6 +3862,7 @@ function App() {
         setLastOrderNo(orderNo);
         setLastPaymentMethod(paymentMethod);
         setLastCustomer(customer || null);
+        setLastOrder({ ...newOrder, id: docRef.id });
         setCart([]);
         setCustomerStage("success");
         return docRef.id;
@@ -2765,6 +3878,7 @@ function App() {
       setLastOrderNo(orderNo);
       setLastPaymentMethod(paymentMethod);
       setLastCustomer(customer || null);
+      setLastOrder({ ...newOrder, id: localId });
       setCart([]);
       setCustomerStage("success");
       return localId;
@@ -2817,23 +3931,20 @@ function App() {
     }
   };
 
-  // ลบออร์เดอร์ที่เสร็จสิ้นจริง ๆ ทั้งหมดในครั้งเดียว — ใช้ล้างรายการเก่าเป็นระยะ
-  // นับเฉพาะ: จัดส่งเสร็จแล้ว (delivered) + รับที่ร้านที่ทำเสร็จแล้ว (done + pickup)
-  // ออร์เดอร์จัดส่งที่แค่ "เสร็จแล้ว" ยังรออยู่ในคิวจัดส่ง — จะยังไม่ถูกลบ
-  const deleteDoneOrders = async () => {
-    const isFinished = (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup");
-    const doneIds = orders.filter(isFinished).map((o) => o.id);
-    if (doneIds.length === 0) return;
+  // ลบออร์เดอร์ตาม id ที่พนักงานติ๊กเลือก — ลบทีละรายการ/เฉพาะที่เลือก กันลบทั้งก้อนพลาด
+  // ลบออกจาก state ท้องถิ่นทันที (optimistic) แล้วค่อยลบขึ้น Firestore ด้านหลัง
+  const deleteOrdersByIds = async (ids) => {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (list.length === 0) return;
+    setOrders((prev) => prev.filter((o) => !list.includes(o.id)));
     if (FIREBASE_SYNC_ENABLED) {
       try {
         const batch = db.batch();
-        doneIds.forEach((id) => batch.delete(db.collection("orders").doc(id)));
+        list.forEach((id) => batch.delete(db.collection("orders").doc(id)));
         await batch.commit();
       } catch (err) {
-        console.error("Failed to bulk-delete done orders:", err);
+        console.error("Failed to delete orders:", err);
       }
-    } else {
-      setOrders((prev) => prev.filter((o) => !isFinished(o)));
     }
   };
 
@@ -2854,21 +3965,36 @@ function App() {
     }
   };
 
-  // Staff link but not unlocked yet → show a PIN screen instead of the app.
-  if (isStaffLink && showUidScreen) {
+  // กำลังตรวจสอบสิทธิ์ (หลังกรอก PIN ถูกต้อง)
+  if (isStaffLink && staffChecking) {
     return (
       <div
         style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
         className="w-full min-h-screen flex flex-col items-center justify-center px-6"
       >
         <div className="w-full max-w-xs text-center">
-          <div style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
-            <Check size={22} />
+          <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">กำลังตรวจสอบสิทธิ์...</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs">ตรวจสอบว่าเครื่องนี้ได้รับอนุญาตจากเจ้าของร้านแล้ว</p>
+        </div>
+      </div>
+    );
+  }
+
+  // PIN ถูกต้องแล้ว แต่เครื่องนี้ยังไม่ได้รับสิทธิ์ — บังคับให้เจ้าของร้านเพิ่ม uid ใน Firebase Console ก่อน
+  if (isStaffLink && staffDenied) {
+    return (
+      <div
+        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        className="w-full min-h-screen flex flex-col items-center justify-center px-6"
+      >
+        <div className="w-full max-w-xs text-center">
+          <div style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
+            <X size={22} />
           </div>
-          <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">รหัส PIN ถูกต้อง</p>
+          <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">เครื่องนี้ยังไม่ได้รับสิทธิ์</p>
           <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4 leading-relaxed">
-            ถ้านี่คืออุปกรณ์เครื่องแรกที่เข้าใช้หน้าพนักงาน ให้ส่งรหัสด้านล่างนี้ให้เจ้าของร้าน
-            เพื่อเปิดสิทธิ์ให้เครื่องนี้ (ทำครั้งเดียวต่อเครื่อง)
+            ต้องให้เจ้าของร้านเพิ่มรหัสอุปกรณ์ด้านล่างนี้ใน Firebase Console ก่อน (Firestore → staffUids →
+            สร้างเอกสารใหม่โดยใช้รหัสนี้เป็นชื่อเอกสาร) แล้วกด "ตรวจสอบสิทธิ์อีกครั้ง" — ทำครั้งเดียวต่อเครื่อง
           </p>
           <div
             style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -2887,15 +4013,54 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={proceedToStaff}
+            onClick={runStaffCheck}
             style={{ background: COLORS.ink, color: "#FFF9F0" }}
             className="w-full rounded-xl py-3 text-sm font-semibold"
           >
-            เข้าหน้าออร์เดอร์ร้าน
+            ตรวจสอบสิทธิ์อีกครั้ง
           </button>
-          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-3 leading-relaxed">
-            ถ้าเจ้าของร้านยังไม่ได้เพิ่มรหัสนี้ในระบบ หน้าออร์เดอร์อาจยังโหลดไม่ขึ้น — รอเจ้าของร้านเพิ่มให้ก่อนแล้วลองใหม่
+          <button
+            type="button"
+            onClick={() => { window.location.href = window.location.pathname; }}
+            style={{ color: COLORS.inkSoft }}
+            className="w-full text-xs font-medium mt-3"
+          >
+            ออกจากหน้าพนักงาน
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ตรวจสอบสิทธิ์ไม่สำเร็จ (เน็ตขัดข้อง หรือเจ้าของร้านยังไม่ได้อัปเดต rules ให้อ่าน staffUids/{uid ตัวเอง})
+  if (isStaffLink && staffCheckError) {
+    return (
+      <div
+        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        className="w-full min-h-screen flex flex-col items-center justify-center px-6"
+      >
+        <div className="w-full max-w-xs text-center">
+          <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">ตรวจสอบสิทธิ์ไม่สำเร็จ</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4 leading-relaxed">
+            ตรวจอินเทอร์เน็ตให้เรียบร้อยแล้วลองอีกครั้ง ถ้ายังไม่หาย ตรวจสอบว่าเจ้าของร้านอัปเดต rules ของ staffUids แล้ว
+            (ต้องเปิดให้อ่านเฉพาะ uid ของตัวเอง)
           </p>
+          <button
+            type="button"
+            onClick={runStaffCheck}
+            style={{ background: COLORS.ink, color: "#FFF9F0" }}
+            className="w-full rounded-xl py-3 text-sm font-semibold"
+          >
+            ลองอีกครั้ง
+          </button>
+          <button
+            type="button"
+            onClick={() => { window.location.href = window.location.pathname; }}
+            style={{ color: COLORS.inkSoft }}
+            className="w-full text-xs font-medium mt-3"
+          >
+            ออกจากหน้าพนักงาน
+          </button>
         </div>
       </div>
     );
@@ -2959,6 +4124,8 @@ function App() {
                 { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
                 { id: "staff-delivery", label: "จัดส่ง" },
                 { id: "staff-menu", label: "จัดการเมนู" },
+                { id: "staff-promos", label: "โปรโมชั่น" },
+                { id: "staff-members", label: "พนักงาน" },
                 { id: "staff-dashboard", label: "ยอดขาย" },
               ].map((t) => (
                 <button
@@ -2988,6 +4155,7 @@ function App() {
             onCheckout={() => setCustomerStage("checkout")}
             shopOpen={shopOpen}
             menuLoaded={menuLoaded}
+            promos={promos}
           />
         )}
         {role === "customer" && customerStage === "checkout" && (
@@ -2996,6 +4164,7 @@ function App() {
             onBack={() => setCustomerStage("menu")}
             onPaid={placeOrder}
             orders={orders}
+            promos={promos}
           />
         )}
         {role === "customer" && customerStage === "success" && (
@@ -3004,6 +4173,7 @@ function App() {
             customer={lastCustomer}
             onNewOrder={() => setCustomerStage("menu")}
             paymentMethod={lastPaymentMethod}
+            order={lastOrder}
           />
         )}
         {role === "staff-orders" && (
@@ -3013,7 +4183,7 @@ function App() {
             onAdvance={advanceOrder}
             onCancel={cancelOrder}
             onDelete={deleteOrder}
-            onDeleteDone={deleteDoneOrders}
+            onDeleteOrders={deleteOrdersByIds}
             onDeleteCancelled={deleteCancelledOrders}
             shopOpen={shopOpen}
             onToggleShopOpen={toggleShopOpen}
@@ -3021,6 +4191,10 @@ function App() {
         )}
         {role === "staff-delivery" && <StaffDeliveryView orders={orders} onAdvance={advanceOrder} />}
         {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} menuLoaded={menuLoaded} />}
+        {role === "staff-promos" && <StaffPromoView promos={promos} updatePromos={updatePromos} menu={menu} />}
+        {role === "staff-members" && (
+          <StaffMembersView uid={uid} staffMembers={staffMembers} onAdd={addStaffUid} onRemove={removeStaffUid} />
+        )}
         {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
       </div>
     </div>
