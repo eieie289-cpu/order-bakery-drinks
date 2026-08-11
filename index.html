@@ -6,9 +6,11 @@
 <title>น้ำหวาน & เบเกอรี่ — สั่งอาหาร</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" />
 <style>
-  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { margin: 0; font-family: 'Itim', sans-serif; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .animate-spin { animation: spin 1s linear infinite; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 </style>
 </head>
 <body>
@@ -25,6 +27,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/17.0.2/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/17.0.2/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+<!-- jsQR — ตัวถอด QR ในเบราว์เซอร์ ใช้ตรวจว่า QR ที่บีบอัดแล้วยังสแกนได้หรือไม่ -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useMemo, useEffect, useRef } = React;
@@ -93,7 +97,12 @@ function ChefHat(props) { return (<IconBase {...props}><path d="M7 21h10v-4H7v4z
 function Users(props) { return (<IconBase {...props}><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3 2.7-5 6-5s6 2 6 5" /><circle cx="17" cy="9" r="2.5" /><path d="M15.5 20c.3-2 1.8-3.5 4-3.8" /></IconBase>); }
 function Truck(props) { return (<IconBase {...props}><rect x="1.5" y="7" width="13" height="9" rx="1" /><path d="M14.5 10.5H18l3 3.2V16h-2" /><circle cx="6.5" cy="18" r="1.8" /><circle cx="16.5" cy="18" r="1.8" /></IconBase>); }
 function DownloadIcon(props) { return (<IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></IconBase>); }
+function Eye(props) { return (<IconBase {...props}><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.5" /></IconBase>); }
 function CalendarIcon(props) { return (<IconBase {...props}><rect x="3" y="4.5" width="18" height="16" rx="2" /><line x1="3" y1="9.5" x2="21" y2="9.5" /><line x1="8" y1="2.5" x2="8" y2="6.5" /><line x1="16" y1="2.5" x2="16" y2="6.5" /></IconBase>); }
+function Box(props) { return (<IconBase {...props}><path d="M21 8.5v7.5l-9 4.5-9-4.5V8.5L12 4l9 4.5z" /><polyline points="3.5 8.5 12 13 20.5 8.5" /><line x1="12" y1="13" x2="12" y2="21.5" /></IconBase>); }
+function Wallet(props) { return (<IconBase {...props}><rect x="2.5" y="6" width="19" height="13" rx="2" /><path d="M16.5 12.5h.01" /><path d="M2.5 9.5h19" /><path d="M16.5 10.5v4" /></IconBase>); }
+function TrendingUp(props) { return (<IconBase {...props}><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></IconBase>); }
+function Receipt(props) { return (<IconBase {...props}><path d="M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21V3z" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="9" y1="12" x2="13" y2="12" /></IconBase>); }
 
 // TODO: เปลี่ยนเป็นรหัสของร้านเอง — กันลูกค้ากดหลุดเข้าหน้าพนักงานเฉย ๆ
 // (นี่ไม่ใช่ระบบความปลอดภัยจริง แค่กันคนทั่วไปเข้าผิดหน้าโดยไม่ตั้งใจ)
@@ -178,6 +187,38 @@ let addOnIdCounter = 100;
 const nextAddOnId = () => `ao${addOnIdCounter++}`;
 let addOnGroupIdCounter = 100;
 const nextAddOnGroupId = () => `g${addOnGroupIdCounter++}`;
+let stockIdCounter = 100;
+const nextStockId = () => `s${stockIdCounter++}`;
+let expenseIdCounter = 100;
+const nextExpenseId = () => `e${expenseIdCounter++}`;
+let salesRoundIdCounter = 100;
+const nextSalesRoundId = () => `sr${salesRoundIdCounter++}`;
+let roundEntryIdCounter = 100;
+const nextRoundEntryId = () => `re${roundEntryIdCounter++}`;
+
+// หาตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) ที่ลูกค้าเลือก — จาก id ตัวเลือก + id กลุ่ม (gid)
+// ใช้ผูกสต็อก/ต้นทุนของท็อปปิ้ง: เมนูไหนมี option นี้ ต้องหาค่า recipe/cost ของ option นั้นให้เจอ
+const findMenuOption = (menuItem, addOn) => {
+  if (!menuItem || !addOn) return null;
+  const groups = normalizeAddOnGroups(menuItem.addOns);
+  // ตัวเลือกใหม่จะติด gid มา — หาตรงกลุ่มก่อน
+  if (addOn.gid) {
+    const g = groups.find((grp) => grp.id === addOn.gid);
+    const o = g && (g.options || []).find((opt) => opt.id === addOn.id);
+    if (o) return o;
+  }
+  // ตัวเก่าที่ไม่มี gid — เทียบด้วย id + ชื่อ
+  for (const g of groups) {
+    const o = (g.options || []).find((opt) => opt.id === addOn.id && opt.name === addOn.name);
+    if (o) return o;
+  }
+  return null;
+};
+
+// หน่วยนับสต็อกที่ให้พนักงานเลือก
+const STOCK_UNITS = ["ชิ้น", "ถุง", "กล่อง", "ขวด", "แก้ว", "กก.", "กรัม", "ลิตร", "มิลลิลิตร"];
+// หมวดรายจ่ายที่ให้พนักงานเลือก
+const EXPENSE_CATEGORIES = ["วัตถุดิบ", "บรรจุภัณฑ์", "ค่าเช่า", "ค่าน้ำไฟ", "เงินเดือน", "ค่าเดินทาง", "อุปกรณ์", "อื่นๆ"];
 
 // ตั้งค่าเลขลำดับ id ของ add-on ให้ต่อจาก id ที่มีอยู่แล้วในเมนูปัจจุบัน
 // (กัน id ซ้ำข้าม session — เดิม id เริ่มนับที่ 100 ใหม่ทุกครั้งที่โหลดหน้า ทำให้ id ที่สร้างคนละครั้งชนกัน
@@ -446,6 +487,82 @@ function compressImage(file, maxDimension = 1280, quality = 0.8) {
   });
 }
 
+// บีบอัดรูป QR โดยเฉพาะ — ต่างจาก compressImage (JPEG) เพราะ QR เป็นภาพขาว-ดำ
+// ที่ต้องเก็บขอบคมชัด: JPEG จะเบลอขอบกลมมนทำให้สแกนยาก/พัง เลยแปลงเป็น PNG แบบ lossless
+// + ย่อขนาดแทน (จากกล้องหลาย MB เหลือหลักร้อย KB แต่ QR ยังคมเหมือนเดิม)
+// คืนค่าเป็น { dataUrl, blob }
+function compressQrImage(file, maxDimension = 1200) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        if (width >= height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false; // กันขอบเบลอตอนย่อขนาด — QR ต้องขอบคม
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error("บีบอัดไม่สำเร็จ"));
+          const reader = new FileReader();
+          reader.onload = () => resolve({ dataUrl: reader.result, blob });
+          reader.onerror = () => reject(new Error("อ่านรูปไม่สำเร็จ"));
+          reader.readAsDataURL(blob);
+        },
+        "image/png"
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("อ่านรูปไม่สำเร็จ"));
+    };
+    img.src = objectUrl;
+  });
+}
+
+// ถอด QR จากรูป (data URL) ด้วย jsQR — คืน { ok, data } / { ok: null } ถ้าโหลดตัวถอดไม่สำเร็จ
+async function decodeQrFromImage(dataUrl) {
+  try {
+    if (typeof jsQR !== "function") return { ok: null, data: "" };
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = rej;
+      img.src = dataUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const res = jsQR(imageData.data, imageData.width, imageData.height);
+    return res && res.data ? { ok: true, data: res.data } : { ok: false, data: "" };
+  } catch (e) {
+    return { ok: false, data: "" };
+  }
+}
+
+// แปลงขนาดไฟล์เป็นข้อความอ่านง่าย (เช่น 3.2 MB / 240 KB)
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  return bytes >= 1024 * 1024
+    ? (bytes / (1024 * 1024)).toFixed(1) + " MB"
+    : Math.max(1, Math.round(bytes / 1024)) + " KB";
+};
+
 // เสียง/สั่นเตือนตอนมีออร์เดอร์ใหม่เข้ามาในหน้าพนักงาน — สร้างเสียง "ติ๊ง-ต่อง" สั้น ๆ
 // ด้วย Web Audio API เอง ไม่ต้องใช้ไฟล์เสียงภายนอก (บางเบราว์เซอร์ต้องมีการแตะหน้าจอ
 // มาก่อนอย่างน้อย 1 ครั้งถึงจะเล่นเสียงได้ ซึ่งพนักงานกด PIN เข้ามาแล้วนับเป็นการแตะแล้ว)
@@ -506,7 +623,7 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos }) {
+function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos, shopName, shopSlogan }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -662,13 +779,13 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           className="absolute -top-10 -right-10 w-40 h-40 rounded-full"
         />
         <h1
-          style={{ fontFamily: "Fraunces, serif", color: "#FFF9F0" }}
-          className="text-3xl font-semibold"
+          style={{ fontFamily: "'Itim', sans-serif", color: "#FFF9F0" }}
+          className="text-3xl font-semibold break-words px-1"
         >
-          น้ำหวาน & เบเกอรี่
+          {shopName || "น้ำหวาน & เบเกอรี่"}
         </h1>
         <p style={{ color: "#F2DDBE" }} className="text-sm mt-1">
-          อบใหม่ทุกวัน · ปั่นสดทุกแก้ว
+          {shopSlogan || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว"}
         </p>
         <div className="mt-3 flex justify-center">
           <span
@@ -870,7 +987,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             <div onClick={closeAddOnSheet} className="absolute inset-0 bg-black/30" />
             <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
               <div className="flex items-center justify-between mb-1">
-                <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+                <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                   {addOnSheetFor.name}
                 </h2>
                 <button onClick={closeAddOnSheet} style={{ color: COLORS.inkSoft }}>
@@ -988,7 +1105,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             className="relative rounded-t-[28px] max-h-[80%] flex flex-col"
           >
             <div className="flex items-center justify-between px-5 pt-5 pb-3">
-              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-xl font-semibold">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-xl font-semibold">
                 ตะกร้าของคุณ
               </h2>
               <button onClick={() => setShowCart(false)} style={{ color: COLORS.inkSoft }}>
@@ -999,8 +1116,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
               {cart.map((item) => (
                 <div key={item.cartId} style={{ borderBottom: `1px solid ${COLORS.line}` }} className="pb-3">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <p style={{ color: COLORS.ink }} className="text-sm font-medium">{item.name}</p>
+                    <div className="flex-1 min-w-0 pr-2">
+                      <p style={{ color: COLORS.ink }} className="text-sm font-medium break-words">{item.name}</p>
                       {item.addOns && item.addOns.length > 0 && (
                         <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
                           + {item.addOns.map((a) => a.name).join(", ")}
@@ -1104,7 +1221,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
+function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
@@ -1159,14 +1276,17 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
       setPromoError("โค้ดส่วนลดไม่ถูกต้อง หรือยังไม่ได้เปิดใช้");
       return;
     }
+    // จำนวนที่ใช้ไปแล้ว — อ่านจากฟิลด์ usage (ใหม่) หรือ uses เดิมในตัวโปรโมชั่น (ข้อมูลเก่า)
+    const usesCount = Number((promo._usage && promo._usage.uses) || promo.uses) || 0;
+    const usedByList = (promo._usage && promo._usage.usedBy) || promo.usedBy || [];
     // จำกัดจำนวนครั้งที่ใช้ได้ทั้งหมด (เช่น ใช้ได้ 50 ครั้ง)
-    if (Number(promo.maxUses) > 0 && (Number(promo.uses) || 0) >= Number(promo.maxUses)) {
+    if (Number(promo.maxUses) > 0 && usesCount >= Number(promo.maxUses)) {
       setAppliedPromo(null);
       setPromoError("โค้ดนี้ใช้ครบจำนวนครั้งแล้ว");
       return;
     }
     // จำกัด 1 ครั้งต่อลูกค้า (เช่น โค้ดเพื่อนแนะนำ)
-    if (promo.perCustomer && (promo.usedBy || []).includes(uid)) {
+    if (promo.perCustomer && usedByList.includes(uid)) {
       setAppliedPromo(null);
       setPromoError("โค้ดนี้ใช้ได้คนละ 1 ครั้งเท่านั้น");
       return;
@@ -1184,6 +1304,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
       baht: discountBaht,
       label: discountSummaryLabel,
       promoId: appliedPromo ? appliedPromo.id : "", // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
+      perCustomer: appliedPromo ? !!appliedPromo.perCustomer : false, // โค้ดแบบ 1 ครั้ง/คน — ใช้อัปเดต usedBy ตอนสั่งสำเร็จ
     };
   };
 
@@ -1256,16 +1377,16 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
       <button onClick={onBack} style={{ color: COLORS.inkSoft }} className="flex items-center gap-1 text-sm mb-4">
         <ArrowLeft size={16} /> กลับไปแก้ตะกร้า
       </button>
-      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-5">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-5">
         ชำระเงิน
       </h1>
 
       <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-4">
         {cart.map((item) => (
           <div key={item.cartId} className="py-1.5">
-            <div className="flex justify-between text-sm">
-              <span style={{ color: COLORS.inkSoft }}>{item.name} × {item.qty}</span>
-              <span style={{ color: COLORS.ink }} className="font-medium">฿{item.price * item.qty}</span>
+            <div className="flex justify-between text-sm gap-2">
+              <span style={{ color: COLORS.inkSoft }} className="flex-1 min-w-0 break-words">{item.name} × {item.qty}</span>
+              <span style={{ color: COLORS.ink }} className="font-medium flex-shrink-0">฿{item.price * item.qty}</span>
             </div>
             {item.addOns && item.addOns.length > 0 && (
               <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
@@ -1295,7 +1416,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
                 >
                   {bringCup && <Check size={10} color="#fff" />}
                 </span>
-                <span style={{ color: COLORS.ink }} className="text-sm font-medium">{byocPromo.name || "นำแก้วมาเอง"}</span>
+                <span style={{ color: COLORS.ink }} className="text-sm font-medium min-w-0 break-words">{byocPromo.name || "นำแก้วมาเอง"}</span>
               </span>
               <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocPromo.discountBaht}</span>
             </button>
@@ -1505,11 +1626,11 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
         </div>
       ) : (
         <div className="mb-6">
-          {method === "promptpay" && PROMPTPAY_QR_URL && (
+          {(method === "promptpay" && (shopQr || PROMPTPAY_QR_URL)) && (
             <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-4 mb-3 text-center">
               <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-3">สแกนจ่ายผ่านพร้อมเพย์</p>
               <img
-                src={PROMPTPAY_QR_URL}
+                src={shopQr || PROMPTPAY_QR_URL}
                 alt="QR พร้อมเพย์ของร้าน"
                 className="w-48 h-48 mx-auto rounded-lg object-contain"
                 style={{ border: `1px solid ${COLORS.line}` }}
@@ -1519,7 +1640,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
               {/* เครื่องที่เปิดแอปสั่งของ กับเครื่องที่ใช้สแกนจ่าย มักเป็นเครื่องเดียวกัน (มือถือเครื่องเดียวสแกน QR บนจอตัวเองไม่ได้)
                   จึงให้ลูกค้าเซฟรูป QR นี้ไว้ก่อน แล้วค่อยเปิดแอปธนาคารไปเลือกรูปจากคลังภาพเพื่อสแกนจ่ายแทน */}
               <a
-                href={PROMPTPAY_QR_URL}
+                href={shopQr || PROMPTPAY_QR_URL}
                 download="promptpay-qr.jpg"
                 style={{ border: `1.5px solid ${COLORS.caramel}`, color: COLORS.caramelDark }}
                 className="w-full mt-3 rounded-xl px-4 py-2.5 text-xs font-semibold inline-flex items-center justify-center gap-1.5"
@@ -1606,7 +1727,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid }) {
 // ================= ORDER SUCCESS =================
 // วาดภาพหลักฐานออร์เดอร์ (ใบยืนยัน) ลง canvas — ใช้ Canvas API ล้วน ๆ ไม่พึ่งไลบรารีเพิ่ม
 // ให้ลูกค้าเซฟ/แชร์ไว้เป็นหลักฐานเวลามารับสินค้าหรือรับของที่บ้าน
-function drawOrderReceipt(order) {
+function drawOrderReceipt(order, shopName) {
   const items = (order && order.items) || [];
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const discount = (order && order.discount && Number(order.discount.baht)) || 0;
@@ -1620,7 +1741,7 @@ function drawOrderReceipt(order) {
   const ctx = canvas.getContext("2d");
 
   const text = (str, x, y, size, weight, color, align = "left") => {
-    ctx.font = `${weight || 500} ${size}px sans-serif`;
+    ctx.font = `${weight || 500} ${size}px 'Itim', sans-serif`;
     ctx.fillStyle = color || "#3A2A1E";
     ctx.textAlign = align;
     ctx.fillText(str, x, y);
@@ -1628,7 +1749,7 @@ function drawOrderReceipt(order) {
 
   // ห่อบรรทัดข้อความยาว ๆ ตามความกว้างสูงสุด
   const wrap = (str, maxWidth, size) => {
-    ctx.font = `500 ${size}px sans-serif`;
+    ctx.font = `500 ${size}px 'Itim', sans-serif`;
     const lines = [];
     let cur = "";
     for (const ch of String(str)) {
@@ -1654,29 +1775,40 @@ function drawOrderReceipt(order) {
   });
   // แถวข้อมูลลูกค้า: รับที่ร้าน = 3 แถว (ชื่อ, วิธีรับ, ชำระเงิน) / จัดส่ง+มีวันเวลา = 4 แถว
   const infoRows = order.method === "delivery" && order.deliveryDate && order.deliveryTime ? 4 : 3;
+  // ชื่อร้าน — ลดขนาดอัตโนมัติถ้ายาวเกิน (กันล้นขอบใบ) ยาวมากจริง ๆ ห่อเป็น 2 บรรทัดแล้วเลื่อนส่วนหัวลง
+  const shopNameText = shopName || "น้ำหวาน & เบเกอรี่";
+  const nameMaxW = W - 2 * M - 16;
+  let nameSize = 34;
+  ctx.font = `700 ${nameSize}px 'Itim', sans-serif`;
+  while (nameSize > 18 && ctx.measureText(shopNameText).width > nameMaxW) nameSize -= 3;
+  const nameLines =
+    ctx.measureText(shopNameText).width > nameMaxW ? wrap(shopNameText, nameMaxW, 18).slice(0, 2) : [shopNameText];
+  const headerShift = (nameLines.length - 1) * 26; // ระยะเลื่อนส่วนหัวลง (เฉพาะเมื่อห่อ 2 บรรทัด)
   // 214 (เริ่มข้อมูล) + แถวข้อมูล + ช่องว่าง + หัวตาราง + รายการ + เส้นคั่น + ส่วนลด + ยอดรวม + ท้ายใบ 2 บรรทัด + ขอบล่าง
-  const H = 214 + infoRows * 27 + 16 + 40 + itemH + 42 + (discount > 0 ? 24 : 0) + 44 + 70;
+  const H = 214 + headerShift + infoRows * 27 + 16 + 40 + itemH + 42 + (discount > 0 ? 24 : 0) + 44 + 70;
   canvas.height = H; // ตั้งความสูงจริง (ล้าง canvas แล้ววาดทับด้วยความสูงที่พอดี)
 
   // พื้นหลังครีม
   ctx.fillStyle = "#FBF3E7";
   ctx.fillRect(0, 0, W, H);
 
-  // ส่วนหัวร้าน + เลขออร์เดอร์
-  text("น้ำหวาน & เบเกอรี่", W / 2, 62, 34, 700, "#B5652E", "center");
-  text("หลักฐานยืนยันออร์เดอร์", W / 2, 92, 16, 500, "#6B5642", "center");
-  text(`ออร์เดอร์ #${order.orderNo}`, W / 2, 142, 40, 700, "#3A2A1E", "center");
+  // ส่วนหัวร้าน + เลขออร์เดอร์ (ชื่อร้านยาว -> ลดขนาด/ห่อบรรทัด + เลื่อนส่วนหัวลง)
+  nameLines.forEach((ln, i) =>
+    text(ln, W / 2, 62 - headerShift / 2 + i * 26, i > 0 ? 18 : nameSize, 700, "#B5652E", "center")
+  );
+  text("หลักฐานยืนยันออร์เดอร์", W / 2, 92 + headerShift, 16, 500, "#6B5642", "center");
+  text(`ออร์เดอร์ #${order.orderNo}`, W / 2, 142 + headerShift, 40, 700, "#3A2A1E", "center");
 
   ctx.strokeStyle = "#E4D3B8";
   ctx.lineWidth = 2;
   ctx.setLineDash([6, 6]);
   ctx.beginPath();
-  ctx.moveTo(M, 168);
-  ctx.lineTo(W - M, 168);
+  ctx.moveTo(M, 168 + headerShift);
+  ctx.lineTo(W - M, 168 + headerShift);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  let y = 214;
+  let y = 214 + headerShift;
 
   // ข้อมูลลูกค้า / วิธีรับสินค้า
   const info = [];
@@ -1760,7 +1892,7 @@ function drawOrderReceipt(order) {
 }
 
 
-function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order }) {
+function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order, shopName }) {
   const [receiptState, setReceiptState] = useState(""); // "" | "saving" | "done" | "error"
 
   // สร้างภาพหลักฐานแล้วบันทึก — บนมือถือถ้าแชร์ไฟล์ได้จะเปิดช่องแชร์ (แถมมี "บันทึกลงเครื่อง" ในนั้น)
@@ -1769,7 +1901,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order 
     if (!order || receiptState === "saving") return;
     setReceiptState("saving");
     try {
-      const canvas = drawOrderReceipt(order);
+      const canvas = drawOrderReceipt(order, shopName);
       const dataUrl = canvas.toDataURL("image/png");
       const fileName = `หลักฐานออร์เดอร์-${order.orderNo}.png`;
       try {
@@ -1803,7 +1935,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order 
       <div style={{ background: COLORS.sageSoft }} className="w-20 h-20 rounded-full flex items-center justify-center mb-5">
         <Check size={36} color={COLORS.sage} strokeWidth={3} />
       </div>
-      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-2">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-2">
         สั่งสำเร็จแล้ว!
       </h1>
       <p style={{ color: COLORS.inkSoft }} className="text-sm mb-1">
@@ -1852,11 +1984,80 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order 
 }
 
 // ================= MENU MANAGER (staff) =================
-function MenuManagerView({ menu, setMenu, menuLoaded }) {
+function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, stockItems }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
-  const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [] });
+  const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
   const [newOptionName, setNewOptionName] = useState({}); // groupId -> ชื่อตัวเลือกที่กำลังพิมพ์
   const [newOptionPrice, setNewOptionPrice] = useState({}); // groupId -> ราคาที่กำลังพิมพ์
+  const [newOptionCost, setNewOptionCost] = useState({}); // groupId -> ต้นทุนตัวเลือกที่กำลังพิมพ์
+
+  // ---- ตั้งค่าร้าน: ชื่อร้าน + คำขวัญ + โค้ด QR (พร้อมเพย์) ----
+  const [shopNameInput, setShopNameInput] = useState("");
+  const [shopSloganInput, setShopSloganInput] = useState("");
+  const [shopQrInput, setShopQrInput] = useState("");
+  const [shopSavedFlash, setShopSavedFlash] = useState(false); // แสดง "บันทึกแล้ว" ชั่วคราว
+  const [qrCompressInfo, setQrCompressInfo] = useState(null); // { before, after } — ขนาดไฟล์ก่อน/หลังบีบอัด
+  const [qrVerify, setQrVerify] = useState(null); // { ok, data } — ผลตรวจว่า QR ยังอ่านได้ไหม (null = ยังไม่ตรวจ)
+  const qrInputRef = useRef(null);
+
+  // ซิงก์ค่าจากข้อมูลร้าน (ตอนโหลดหน้า / เมื่อพนักงานเครื่องอื่นแก้แล้วทุกเครื่องเห็น)
+  useEffect(() => {
+    setShopNameInput((shopInfo && shopInfo.name) || "");
+    setShopSloganInput((shopInfo && shopInfo.slogan) || "");
+    setShopQrInput((shopInfo && shopInfo.qr) || "");
+  }, [shopInfo]);
+
+  const handleQrUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setQrVerify(null);
+    setQrCompressInfo(null);
+    try {
+      // บีบอัดเป็น PNG (lossless — QR ต้องขอบคม สแกนได้เหมือนเดิม) + ย่อขนาดอัตโนมัติ
+      const before = file.size;
+      const { dataUrl, blob } = await compressQrImage(file, 1200);
+      let finalDataUrl = dataUrl;
+      let after = blob.size;
+      let kept = false;
+      // ถ้า PNG ใหญ่กว่าไฟล์เดิม (เช่นไฟล์เดิมเล็กอยู่แล้ว ~<150KB) ใช้ไฟล์เดิมแทน กันขนาดบวม
+      if (blob.size >= before) {
+        finalDataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        });
+        after = before;
+        kept = true;
+      }
+      setShopQrInput(finalDataUrl);
+      setQrCompressInfo({ before, after, kept });
+      // ตรวจอัตโนมัติทันทีว่า QR (ตัวที่เลือกใช้จริง) ยังถอด/สแกนได้ไหม
+      const r = await decodeQrFromImage(finalDataUrl);
+      setQrVerify(r);
+    } catch (err) {
+      console.error("Compress QR failed, using original file:", err);
+      const reader = new FileReader();
+      reader.onload = async () => {
+        setShopQrInput(reader.result);
+        const r = await decodeQrFromImage(reader.result);
+        setQrVerify(r);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // กดปุ่ม "ตรวจสอบว่า QR สแกนได้ไหม" — ถอด QR จากรูปปัจจุบันอีกครั้ง
+  const verifyQrAgain = async () => {
+    setQrVerify(null);
+    const r = await decodeQrFromImage(shopQrInput);
+    setQrVerify(r);
+  };
+
+  const saveShopSettings = () => {
+    onSaveShopInfo({ name: shopNameInput, slogan: shopSloganInput, qr: shopQrInput });
+    setShopSavedFlash(true);
+    setTimeout(() => setShopSavedFlash(false), 2000);
+  };
 
   const startEdit = (item) => {
     // ให้เลข id ใหม่ต่อจาก id ที่มีอยู่แล้วในเมนู (กัน id ซ้ำข้าม session)
@@ -1867,7 +2068,16 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
       ...g,
       options: [...(g.options || [])].sort((a, b) => a.price - b.price),
     }));
-    setForm({ name: item.name, desc: item.desc, price: String(item.price), category: item.category, img: item.img || "", addOns: groups });
+    setForm({
+      name: item.name,
+      desc: item.desc,
+      price: String(item.price),
+      category: item.category,
+      img: item.img || "",
+      addOns: groups,
+      cost: item.cost != null && item.cost !== "" ? String(item.cost) : "",
+      recipe: Object.fromEntries(Object.entries(item.recipe || {}).map(([k, v]) => [k, String(v)])),
+    });
     setNewOptionName({});
     setNewOptionPrice({});
   };
@@ -1875,7 +2085,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
   const startNew = () => {
     seedAddOnCounters(menu);
     setEditing("new");
-    setForm({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [] });
+    setForm({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
     setNewOptionName({});
     setNewOptionPrice({});
   };
@@ -1924,12 +2134,25 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
       ...f,
       addOns: f.addOns.map((g) =>
         g.id === gid
-          ? { ...g, options: [...(g.options || []), { id: nextAddOnId(), name, price }].sort((a, b) => a.price - b.price) }
+          ? { ...g, options: [...(g.options || []), { id: nextAddOnId(), name, price, cost: newOptionCost[gid] || "", recipe: {} }].sort((a, b) => a.price - b.price) }
           : g
       ),
     }));
     setNewOptionName((m) => ({ ...m, [gid]: "" }));
     setNewOptionPrice((m) => ({ ...m, [gid]: "" }));
+    setNewOptionCost((m) => ({ ...m, [gid]: "" }));
+  };
+
+  // แก้ไขท็อปปิ้ง/แอดออนตัวเดียว — ชื่อ/ราคา/ต้นทุน/วัตถุดิบที่ผูกไว้
+  const updateOption = (gid, oid, patch) => {
+    setForm((f) => ({
+      ...f,
+      addOns: f.addOns.map((g) =>
+        g.id === gid
+          ? { ...g, options: (g.options || []).map((o) => (o.id === oid ? { ...o, ...patch } : o)) }
+          : g
+      ),
+    }));
   };
 
   const removeOption = (gid, oid) => {
@@ -1944,15 +2167,25 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
     const priceNum = Number(form.price);
     // ซ่อม id ซ้ำ (ข้อมูลเก่า) ให้อัตโนมัติก่อนบันทึก — ตัวที่ซ้ำจะได้ id ใหม่ ไม่ชนกันอีก
     const addOns = ensureUniqueAddOnIds(form.addOns);
+    // ต้นทุนต่อหน่วย (บาท) — เว้นว่าง = ไม่ได้ตั้งต้นทุน
+    const costNum = form.cost === "" || form.cost == null ? null : Number(form.cost);
+    // สูตรวัตถุดิบ: เก็บเฉพาะรายการที่เลือกสต็อกจริงและจำนวน > 0
+    const recipe = {};
+    Object.entries(form.recipe || {}).forEach(([sid, v]) => {
+      const per = Number(v);
+      if (sid && per > 0) recipe[sid] = per;
+    });
     if (editing === "new") {
       setMenu((prev) => [
         ...prev,
-        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: true, img: form.img, addOns },
+        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: true, img: form.img, addOns, cost: costNum, recipe },
       ]);
     } else {
       setMenu((prev) =>
         prev.map((m) =>
-          m.id === editing ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns } : m
+          m.id === editing
+            ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns, cost: costNum, recipe }
+            : m
         )
       );
     }
@@ -1981,7 +2214,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold">
+          <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
             จัดการเมนู
           </h1>
           <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">เพิ่ม แก้ไข หรือซ่อนเมนูของร้าน</p>
@@ -1992,6 +2225,128 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
           className="w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition-transform flex-shrink-0"
         >
           <Plus size={20} />
+        </button>
+      </div>
+
+      {/* ตั้งค่าร้าน — ชื่อร้าน + โค้ด QR (พร้อมเพย์) */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-6">
+        <div className="flex items-center justify-between mb-1">
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold flex items-center gap-1.5">
+            <QrCode size={15} style={{ color: COLORS.caramelDark }} /> ตั้งค่าร้าน
+          </p>
+          {shopSavedFlash && (
+            <span style={{ color: COLORS.sage }} className="text-[11px] font-semibold flex items-center gap-1">
+              <Check size={13} /> บันทึกแล้ว
+            </span>
+          )}
+        </div>
+        <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
+          ชื่อร้านที่ลูกค้าเห็น กับโค้ดพร้อมเพย์สำหรับรับเงิน
+        </p>
+
+        <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อร้าน</label>
+        <input
+          value={shopNameInput}
+          onChange={(e) => setShopNameInput(e.target.value)}
+          placeholder="ชื่อร้านของคุณ"
+          className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
+          style={{ background: COLORS.cream, border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+        />
+
+        <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">คำขวัญ / คอนเซปร้าน</label>
+        <input
+          value={shopSloganInput}
+          onChange={(e) => setShopSloganInput(e.target.value)}
+          placeholder="เช่น อบใหม่ทุกวัน · ปั่นสดทุกแก้ว"
+          className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
+          style={{ background: COLORS.cream, border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+        />
+        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">ข้อความสั้น ๆ ที่โชว์ใต้ชื่อร้านบนหน้าลูกค้า</p>
+
+        <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">โค้ด QR (พร้อมเพย์)</label>
+        <div className="flex items-center gap-3">
+          <img
+            src={shopQrInput}
+            alt="QR พร้อมเพย์"
+            className="w-20 h-20 rounded-xl object-contain flex-shrink-0"
+            style={{ border: `1px solid ${COLORS.line}`, background: "#FFFFFF" }}
+          />
+          <button
+            onClick={() => qrInputRef.current && qrInputRef.current.click()}
+            style={{ color: COLORS.caramelDark, border: `1.5px solid ${COLORS.caramel}` }}
+            className="rounded-xl px-3.5 py-2.5 text-xs font-semibold flex items-center gap-1.5"
+          >
+            <UploadCloud size={14} /> เปลี่ยนรูป QR
+          </button>
+          <input ref={qrInputRef} type="file" accept="image/*" className="hidden" onChange={handleQrUpload} />
+        </div>
+        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5 leading-relaxed">
+          อัปโหลดรูป QR พร้อมเพย์ (ที่ธนาคารออกให้) — ลูกค้าจะเห็นรูปนี้ตอนชำระเงินทันที
+        </p>
+
+        {/* ผลการบีบอัดอัตโนมัติ: ขนาดก่อน → หลัง (หรือใช้ไฟล์เดิมถ้าเล็กพออยู่แล้ว) */}
+        {qrCompressInfo && !qrCompressInfo.kept && (
+          <div
+            style={{ background: COLORS.sageSoft, color: COLORS.sage }}
+            className="text-[11px] font-medium rounded-xl px-3 py-2 mt-2 flex items-center gap-1.5"
+          >
+            <Check size={12} className="flex-shrink-0" />
+            <span>บีบอัดอัตโนมัติ {formatBytes(qrCompressInfo.before)} → {formatBytes(qrCompressInfo.after)} (PNG ไม่เสียคุณภาพ)</span>
+          </div>
+        )}
+        {qrCompressInfo && qrCompressInfo.kept && (
+          <div
+            style={{ background: COLORS.sageSoft, color: COLORS.sage }}
+            className="text-[11px] font-medium rounded-xl px-3 py-2 mt-2 flex items-center gap-1.5"
+          >
+            <Check size={12} className="flex-shrink-0" />
+            <span>ไฟล์ {formatBytes(qrCompressInfo.after)} เล็กพออยู่แล้ว — ใช้ไฟล์เดิม ไม่บีบอัดซ้ำ (ยังคมชัด)</span>
+          </div>
+        )}
+
+        {/* ผลตรวจว่า QR ยังอ่านได้ไหมหลังบีบอัด (ถอดจริงด้วย jsQR) */}
+        {qrVerify && qrVerify.ok === true && (
+          <div
+            style={{ background: COLORS.sageSoft, color: COLORS.sage }}
+            className="text-[11px] font-medium rounded-xl px-3 py-2 mt-2 flex items-start gap-1.5"
+          >
+            <Check size={12} className="mt-0.5 flex-shrink-0" />
+            <span className="break-all leading-relaxed">
+              ✓ QR ยังอ่านได้หลังบีบอัด — ข้อมูล: {qrVerify.data.length > 60 ? qrVerify.data.slice(0, 60) + "…" : qrVerify.data}
+            </span>
+          </div>
+        )}
+        {qrVerify && qrVerify.ok === false && (
+          <div
+            style={{ background: "#F3D9D3", color: "#8A3A2B" }}
+            className="text-[11px] font-medium rounded-xl px-3 py-2 mt-2 flex items-start gap-1.5"
+          >
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span className="leading-relaxed">QR อ่านไม่ได้หลังบีบอัด ลองถ่ายใหม่ให้เต็มกรอบชัด ๆ แล้วอัปโหลดอีกครั้ง</span>
+          </div>
+        )}
+        {qrVerify && qrVerify.ok === null && (
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
+            โหลดตัวตรวจ QR ไม่สำเร็จบนเครื่องนี้ — ข้ามการตรวจ (รูปยังใช้งานได้ตามปกติ)
+          </p>
+        )}
+
+        {shopQrInput && (
+          <button
+            onClick={verifyQrAgain}
+            style={{ color: COLORS.caramelDark, border: `1.5px solid ${COLORS.caramel}` }}
+            className="mt-2 rounded-xl px-3.5 py-2 text-xs font-semibold flex items-center gap-1.5"
+          >
+            <Check size={13} /> ตรวจสอบว่า QR สแกนได้ไหม
+          </button>
+        )}
+
+        <button
+          onClick={saveShopSettings}
+          style={{ background: COLORS.ink, color: "#FFF9F0" }}
+          className="w-full rounded-xl py-2.5 text-sm font-semibold mt-3 active:scale-[0.99] transition-transform"
+        >
+          บันทึกข้อมูลร้าน
         </button>
       </div>
 
@@ -2030,6 +2385,13 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
                       </span>
                     )}
                   </p>
+                  {(item.cost != null || (item.recipe && Object.keys(item.recipe).length > 0)) && (
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
+                      {item.cost != null ? `ต้นทุน ฿${item.cost}/หน่วย` : ""}
+                      {item.cost != null && Object.keys(item.recipe || {}).length > 0 ? " · " : ""}
+                      {Object.keys(item.recipe || {}).length > 0 ? `ใช้วัตถุดิบ ${Object.keys(item.recipe).length} รายการ` : ""}
+                    </p>
+                  )}
                 </div>
                 <button onClick={() => toggleActive(item.id)} className="flex-shrink-0">
                   <Chip tone={item.active ? "sage" : "caramel"}>{item.active ? "กำลังขาย" : "ซ่อนอยู่"}</Chip>
@@ -2053,7 +2415,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
           {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
           <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
             <div className="flex items-center justify-between mb-4">
-              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 {editing === "new" ? "เพิ่มเมนูใหม่" : "แก้ไขเมนู"}
               </h2>
               <button onClick={() => setEditing(null)} style={{ color: COLORS.inkSoft }}>
@@ -2141,6 +2503,101 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
                   className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
                 />
               </div>
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ต้นทุน/หน่วย (บาท)</label>
+                <input
+                  value={form.cost}
+                  onChange={(e) => setForm((f) => ({ ...f, cost: e.target.value.replace(/[^0-9.]/g, "") }))}
+                  placeholder="เช่น 18 (เว้นว่าง = ยังไม่ตั้งต้นทุน)"
+                  inputMode="decimal"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                />
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
+                  ใช้คำนวณกำไร/ขาดทุนในแท็บบัญชี (ยอดขาย − ต้นทุน = กำไรขั้นต้น)
+                </p>
+              </div>
+
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
+                  วัตถุดิบที่ใช้ (ต่อ 1 หน่วย) — สำหรับตัดสต็อกอัตโนมัติ
+                </label>
+                {Object.keys(form.recipe).length === 0 && (
+                  <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-2">
+                    {stockItems.length === 0
+                      ? "ยังไม่มีรายการสต็อก — ไปที่แท็บ \"สต็อก\" แล้วเพิ่มวัตถุดิบก่อน แล้วกลับมาผูกที่นี่"
+                      : "ยังไม่ได้ผูกสต็อก — กด \"+ เพิ่มวัตถุดิบ\" แล้วเลือกว่าเมนูนี้ใช้อะไรบ้าง กี่หน่วยต่อ 1 แก้ว/ชิ้น"}
+                  </p>
+                )}
+                <div className="space-y-2 mb-2">
+                  {Object.entries(form.recipe).map(([sid, qty]) => {
+                    const stock = stockItems.find((s) => s.id === sid);
+                    return (
+                      <div key={sid} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-2.5 flex items-center gap-2">
+                        <select
+                          value={sid}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setForm((f) => {
+                              const next = { ...f.recipe };
+                              delete next[sid];
+                              if (v) next[v] = f.recipe[sid] || "";
+                              return { ...f, recipe: next };
+                            });
+                          }}
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                          className="flex-1 min-w-0 rounded-lg px-2 py-2 text-sm bg-white outline-none"
+                        >
+                          <option value="">เลือกวัตถุดิบ…</option>
+                          {stockItems.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} ({s.unit})
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          value={qty}
+                          onChange={(e) => setForm((f) => ({ ...f, recipe: { ...f.recipe, [sid]: e.target.value.replace(/[^0-9.]/g, "") } }))}
+                          placeholder="จำนวน"
+                          inputMode="decimal"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                          className="w-20 rounded-lg px-2 py-2 text-sm bg-white outline-none text-center"
+                        />
+                        <span style={{ color: COLORS.inkSoft }} className="text-[11px] flex-shrink-0 w-10">
+                          {stock ? stock.unit : "หน่วย"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm((f) => {
+                              const next = { ...f.recipe };
+                              delete next[sid];
+                              return { ...f, recipe: next };
+                            })
+                          }
+                          style={{ color: "#C0533F" }}
+                          className="flex-shrink-0"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstUnused = stockItems.find((s) => !(s.id in form.recipe));
+                    if (!firstUnused) return;
+                    setForm((f) => ({ ...f, recipe: { ...f.recipe, [firstUnused.id]: "" } }));
+                  }}
+                  disabled={stockItems.length === 0 || stockItems.every((s) => s.id in form.recipe)}
+                  style={{ border: `1.5px dashed ${COLORS.line}`, color: COLORS.caramelDark }}
+                  className="w-full rounded-xl py-2.5 text-xs font-semibold bg-white disabled:opacity-40"
+                >
+                  + เพิ่มวัตถุดิบ
+                </button>
+              </div>
 
               <div>
                 <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
@@ -2183,22 +2640,112 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
                           <Trash2 size={14} />
                         </button>
                       </div>
-                      {/* ตัวเลือกย่อยในกลุ่ม */}
+                      {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ */}
                       {g.options && g.options.length > 0 ? (
                         <div className="space-y-1.5">
                           {g.options.map((o) => (
                             <div
                               key={o.id}
                               style={{ background: COLORS.paper }}
-                              className="flex items-center justify-between rounded-lg px-3 py-2"
+                              className="rounded-lg px-3 py-2"
                             >
-                              <span style={{ color: COLORS.ink }} className="text-sm">{o.name}</span>
                               <div className="flex items-center gap-2">
-                                <span style={{ color: COLORS.caramelDark }} className="text-xs font-bold">+฿{o.price}</span>
-                                <button onClick={() => removeOption(g.id, o.id)} style={{ color: "#C0533F" }}>
+                                <input
+                                  value={o.name}
+                                  onChange={(e) => updateOption(g.id, o.id, { name: e.target.value })}
+                                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                                  className="flex-1 min-w-0 rounded-lg px-2 py-1.5 text-sm bg-white outline-none"
+                                />
+                                <span style={{ color: COLORS.caramelDark }} className="text-[11px] font-bold flex-shrink-0">+฿</span>
+                                <input
+                                  value={o.price}
+                                  onChange={(e) => updateOption(g.id, o.id, { price: e.target.value.replace(/[^0-9]/g, "") })}
+                                  inputMode="numeric"
+                                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                                  className="w-14 rounded-lg px-2 py-1.5 text-sm bg-white outline-none text-center"
+                                />
+                                <button onClick={() => removeOption(g.id, o.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
                                   <Trash2 size={14} />
                                 </button>
                               </div>
+                              {/* ต้นทุน + วัตถุดิบของท็อปปิ้งนี้ (ตัดสต็อกอัตโนมัติ) */}
+                              <div className="flex items-center gap-1.5 mt-1.5">
+                                <span style={{ color: COLORS.inkSoft }} className="text-[10px] flex-shrink-0">ต้นทุน</span>
+                                <input
+                                  value={o.cost != null ? String(o.cost) : ""}
+                                  onChange={(e) => updateOption(g.id, o.id, { cost: e.target.value.replace(/[^0-9.]/g, "") })}
+                                  placeholder="฿"
+                                  inputMode="decimal"
+                                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                                  className="w-16 rounded-lg px-2 py-1 text-[11px] bg-white outline-none"
+                                />
+                                <span style={{ color: COLORS.inkSoft }} className="text-[10px] flex-shrink-0">ใช้วัตถุดิบ:</span>
+                                {Object.keys(o.recipe || {}).length === 0 && (
+                                  <span style={{ color: COLORS.inkSoft }} className="text-[10px]">ยังไม่ผูก</span>
+                                )}
+                              </div>
+                              {Object.entries(o.recipe || {}).map(([sid, qty]) => {
+                                const stock = stockItems.find((s) => s.id === sid);
+                                return (
+                                  <div key={sid} className="flex items-center gap-1.5 mt-1">
+                                    <select
+                                      value={sid}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        const recipe = { ...(o.recipe || {}) };
+                                        delete recipe[sid];
+                                        if (v) recipe[v] = o.recipe[sid] || "";
+                                        updateOption(g.id, o.id, { recipe });
+                                      }}
+                                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                                      className="flex-1 min-w-0 rounded-lg px-2 py-1 text-[11px] bg-white outline-none"
+                                    >
+                                      <option value="">เลือกวัตถุดิบ…</option>
+                                      {stockItems.map((s) => (
+                                        <option key={s.id} value={s.id}>{s.name} ({s.unit})</option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={qty}
+                                      onChange={(e) =>
+                                        updateOption(g.id, o.id, { recipe: { ...(o.recipe || {}), [sid]: e.target.value.replace(/[^0-9.]/g, "") } })
+                                      }
+                                      placeholder="จำนวน"
+                                      inputMode="decimal"
+                                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                                      className="w-16 rounded-lg px-2 py-1 text-[11px] bg-white outline-none text-center"
+                                    />
+                                    <span style={{ color: COLORS.inkSoft }} className="text-[10px] w-8 flex-shrink-0">
+                                      {stock ? stock.unit : "หน่วย"}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const recipe = { ...(o.recipe || {}) };
+                                        delete recipe[sid];
+                                        updateOption(g.id, o.id, { recipe });
+                                      }}
+                                      style={{ color: "#C0533F" }}
+                                      className="flex-shrink-0"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const firstUnused = stockItems.find((s) => !((o.recipe || {})[s.id] !== undefined));
+                                  if (!firstUnused) return;
+                                  updateOption(g.id, o.id, { recipe: { ...(o.recipe || {}), [firstUnused.id]: "" } });
+                                }}
+                                disabled={stockItems.length === 0 || stockItems.every((s) => (o.recipe || {})[s.id] !== undefined)}
+                                style={{ color: COLORS.caramelDark }}
+                                className="text-[10px] font-semibold mt-1 disabled:opacity-40"
+                              >
+                                + วัตถุดิบ
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -2221,6 +2768,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
                           inputMode="numeric"
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                           className="w-16 rounded-lg px-3 py-2 text-sm bg-white outline-none"
+                        />
+                        <input
+                          value={newOptionCost[g.id] || ""}
+                          onChange={(e) => setNewOptionCost((m) => ({ ...m, [g.id]: e.target.value.replace(/[^0-9.]/g, "") }))}
+                          placeholder="ต้นทุน฿"
+                          inputMode="decimal"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                          className="w-20 rounded-lg px-3 py-2 text-sm bg-white outline-none"
                         />
                         <button
                           type="button"
@@ -2259,7 +2814,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded }) {
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, shopOpen, onToggleShopOpen }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
@@ -2296,7 +2851,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <div className="flex items-start justify-between gap-2 mb-1">
-        <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold">
+        <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
           ออร์เดอร์เข้าร้าน
         </h1>
         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -2327,35 +2882,6 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-5">อัปเดตแบบเรียลไทม์เมื่อลูกค้าสั่ง</p>
-
-      {/* ปุ่มเปิด/ปิดร้าน — คุมได้ว่าลูกค้าจะสั่งของเข้ามาได้หรือไม่ */}
-      <button
-        onClick={onToggleShopOpen}
-        style={{
-          background: shopOpen ? COLORS.sageSoft : "#F3D9D3",
-          border: `1.5px solid ${shopOpen ? COLORS.sage : "#C0533F"}`,
-        }}
-        className="w-full rounded-2xl px-4 py-3.5 flex items-center justify-between mb-4"
-      >
-        <span className="flex items-center gap-2.5">
-          <span
-            style={{ background: shopOpen ? COLORS.sage : "#C0533F" }}
-            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-          />
-          <span style={{ color: shopOpen ? COLORS.ink : "#8A3A2B" }} className="text-sm font-semibold">
-            {shopOpen ? "ร้านเปิดอยู่ — ลูกค้าสั่งของได้" : "ร้านปิดอยู่ — ลูกค้าสั่งของไม่ได้"}
-          </span>
-        </span>
-        <span
-          style={{
-            background: shopOpen ? "#C0533F" : COLORS.sage,
-            color: "#FFF9F0",
-          }}
-          className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0"
-        >
-          {shopOpen ? "ปิดร้าน" : "เปิดร้าน"}
-        </span>
-      </button>
 
       {sorted.length === 0 && (
         <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
@@ -2556,7 +3082,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           <div onClick={() => setDeletePickOpen(false)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
             <div className="flex items-center justify-between mb-1">
-              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 เลือกออร์เดอร์ที่ต้องการลบ
               </h2>
               <button onClick={() => setDeletePickOpen(false)} style={{ color: COLORS.inkSoft }}>
@@ -2748,7 +3274,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           <div onClick={() => setDeleteCancelPickOpen(false)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
             <div className="flex items-center justify-between mb-1">
-              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 เลือกออร์เดอร์ที่ยกเลิกที่ต้องการลบ
               </h2>
               <button onClick={() => setDeleteCancelPickOpen(false)} style={{ color: COLORS.inkSoft }}>
@@ -2926,7 +3452,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
-      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
         คิวจัดส่ง
       </h1>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-5">
@@ -3215,7 +3741,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <div className="flex items-center justify-between mb-1">
-        <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold">
+        <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
           โปรโมชั่น
         </h1>
         <button
@@ -3239,7 +3765,10 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       )}
 
       <div className="space-y-2.5">
-        {promos.map((p) => (
+        {promos.map((p) => {
+          // จำนวนการใช้โค้ด — อ่านจากฟิลด์ usage (ใหม่) หรือ uses เดิมในตัวโปรโมชั่น (ข้อมูลเก่า)
+          const promoUsesCount = Number((p._usage && p._usage.uses) || p.uses) || 0;
+          return (
           <div
             key={p.id}
             style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: p.active ? 1 : 0.55 }}
@@ -3258,7 +3787,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             {p.type === "code" && (Number(p.maxUses) > 0 || p.perCustomer) && (
               <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-medium mt-0.5">
                 {Number(p.maxUses) > 0
-                  ? `ใช้แล้ว ${Number(p.uses) || 0}/${p.maxUses} ครั้ง · เหลือ ${Math.max(0, Number(p.maxUses) - (Number(p.uses) || 0))} ครั้ง`
+                  ? `ใช้แล้ว ${promoUsesCount}/${p.maxUses} ครั้ง · เหลือ ${Math.max(0, Number(p.maxUses) - promoUsesCount)} ครั้ง`
                   : ""}
                 {Number(p.maxUses) > 0 && p.perCustomer ? " · " : ""}
                 {p.perCustomer ? "1 ครั้งต่อลูกค้า" : ""}
@@ -3273,7 +3802,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* ยืนยันลบ */}
@@ -3311,7 +3841,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             className="relative rounded-t-[28px] p-5 pb-8"
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 {editing === "new" ? "เพิ่มโปรโมชั่นใหม่" : "แก้ไขโปรโมชั่น"}
               </h2>
               <button onClick={() => setEditing(null)} style={{ color: COLORS.inkSoft }}>
@@ -3676,7 +4206,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
-      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
         สิทธิ์พนักงาน
       </h1>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
@@ -3842,6 +4372,967 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
   );
 }
 
+// ================= STAFF: รวมสลิปโอนเงิน =================
+// รวบรวมสลิปที่ลูกค้าแนบมาทั้งหมดไว้ที่เดียว — เก็บไว้ทำบัญชี/ยืนยันยอดโอน
+// (ออร์เดอร์ที่ชำระแบบโอน/พร้อมเพย์จะมี slip = { url, dataUrl } ฝังอยู่ใน Firestore)
+function StaffSlipsView({ orders }) {
+  const [zoomedSlip, setZoomedSlip] = useState(null); // สลิปที่กำลังขยายดูเต็ม
+
+  // เฉพาะออร์เดอร์ที่มีสลิปจริง ๆ เรียงใหม่สุดก่อน
+  const slips = useMemo(
+    () =>
+      orders
+        .filter((o) => o.slip && o.slip.dataUrl)
+        .sort((a, b) => b.createdAt - a.createdAt),
+    [orders]
+  );
+  const totalReceived = slips.reduce((s, o) => s + calcOrderTotal(o), 0);
+
+  const slipUrl = (o) => o.slip.url || o.slip.dataUrl;
+
+  const downloadSlip = (order) => {
+    const url = slipUrl(order);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `สลิป-ออร์เดอร์-${order.orderNo}.${url.startsWith("data:image/png") ? "png" : "jpg"}`;
+    a.click();
+  };
+
+  const payLabel = (m) => (m === "card" ? "บัตรเครดิต/เดบิต" : m === "cash" ? "เงินสด" : "พร้อมเพย์/โอน");
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+        สลิปโอนเงิน
+      </h1>
+      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+        {slips.length} ออร์เดอร์ · ยอดโอนรวม ฿{totalReceived} — เก็บไว้ทำบัญชี (เรียงใหม่สุดก่อน)
+      </p>
+
+      {slips.length === 0 && (
+        <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
+          <Banknote size={32} className="mx-auto mb-2 opacity-50" />
+          ยังไม่มีสลิปที่ลูกค้าแนบมา
+          <p className="text-[11px] mt-1">สลิปของออร์เดอร์ที่ชำระแบบโอน/พร้อมเพย์ จะมารวมอยู่ตรงนี้</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {slips.map((order) => (
+          <div
+            key={order.id}
+            style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+            className="rounded-2xl p-3.5 flex gap-3"
+          >
+            <button onClick={() => setZoomedSlip(slipUrl(order))} className="flex-shrink-0">
+              <img
+                src={order.slip.dataUrl}
+                alt={`สลิปออร์เดอร์ ${order.orderNo}`}
+                className="w-20 h-24 rounded-xl object-cover"
+                style={{ border: `1px solid ${COLORS.line}`, background: "#FFFFFF" }}
+              />
+            </button>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <span style={{ color: COLORS.ink }} className="font-bold text-sm">#{order.orderNo}</span>
+                <Chip tone="sage">฿{calcOrderTotal(order)}</Chip>
+              </div>
+              <p style={{ color: COLORS.inkSoft }} className="text-xs truncate mt-0.5">
+                {order.customerName || "ไม่ระบุชื่อ"} · {order.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง"} · {payLabel(order.paymentMethod)}
+              </p>
+              <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
+                {new Date(order.createdAt).toLocaleString("th-TH")}
+              </p>
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  onClick={() => setZoomedSlip(slipUrl(order))}
+                  style={{ color: COLORS.caramelDark, border: `1.5px solid ${COLORS.caramel}` }}
+                  className="rounded-full px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1"
+                >
+                  <Eye size={12} /> ดูใหญ่
+                </button>
+                <button
+                  onClick={() => downloadSlip(order)}
+                  style={{ color: COLORS.sage, border: `1.5px solid ${COLORS.sage}` }}
+                  className="rounded-full px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1"
+                >
+                  <DownloadIcon size={12} /> บันทึกรูป
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <ImageLightbox src={zoomedSlip} onClose={() => setZoomedSlip(null)} />
+    </div>
+  );
+}
+
+// ================= STAFF STOCK VIEW (สต็อก) =================
+// เก็บวัตถุดิบ/ของคงเหลือ + จุดแจ้งเตือนใกล้หมด + ผูกกับเมนู (เมนูไหนใช้ของอะไร)
+function StaffStockView({ stockItems, updateStock, menu }) {
+  const [editing, setEditing] = useState(null); // "new" | id รายการที่กำลังแก้
+  const [form, setForm] = useState({ name: "", unit: "ชิ้น", qty: "", minQty: "" });
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  // แผนที่ stockId -> เมนูที่ใช้ (ชื่อเมนู + จำนวนต่อ 1 หน่วย) — ดูย้อนกลับว่า "ของนี้ใช้กับเมนูไหนบ้าง"
+  const stockUsage = useMemo(() => {
+    const map = new Map();
+    (menu || []).forEach((m) => {
+      Object.entries(m.recipe || {}).forEach(([sid, per]) => {
+        if (!map.has(sid)) map.set(sid, []);
+        map.get(sid).push({ menuName: m.name, per: Number(per) || 0 });
+      });
+    });
+    return map;
+  }, [menu]);
+
+  const statusOf = (s) => {
+    const qty = Number(s.qty) || 0;
+    const min = Number(s.minQty) || 0;
+    if (qty <= 0) return { label: "หมด", color: "#C0533F", bg: "#F3D9D3" };
+    if (min > 0 && qty <= min) return { label: "ใกล้หมด", color: "#B08628", bg: "#F5EAC9" };
+    return { label: "ปกติ", color: COLORS.sage, bg: COLORS.sageSoft };
+  };
+
+  const outCount = stockItems.filter((s) => (Number(s.qty) || 0) <= 0).length;
+  const lowCount = stockItems.filter(
+    (s) => (Number(s.qty) || 0) > 0 && (Number(s.minQty) || 0) > 0 && (Number(s.qty) || 0) <= (Number(s.minQty) || 0)
+  ).length;
+
+  const startNew = () => {
+    setEditing("new");
+    setForm({ name: "", unit: "ชิ้น", qty: "", minQty: "" });
+  };
+  const startEdit = (item) => {
+    setEditing(item.id);
+    setForm({ name: item.name, unit: item.unit || "ชิ้น", qty: String(item.qty ?? ""), minQty: String(item.minQty ?? "") });
+  };
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    const qty = form.qty === "" ? 0 : Number(form.qty);
+    const minQty = form.minQty === "" ? 0 : Number(form.minQty);
+    if (editing === "new") {
+      updateStock((prev) => [...prev, { id: nextStockId(), name: form.name.trim(), unit: form.unit, qty, minQty }]);
+    } else {
+      updateStock((prev) => prev.map((s) => (s.id === editing ? { ...s, name: form.name.trim(), unit: form.unit, qty, minQty } : s)));
+    }
+    setEditing(null);
+  };
+
+  // ปรับจำนวนทันที (+1/-1) — ใช้ตอนรับของเข้าร้านหรือนับสต็อก
+  const adjust = (id, delta) => {
+    updateStock((prev) => prev.map((s) => (s.id === id ? { ...s, qty: Math.max(0, (Number(s.qty) || 0) + delta) } : s)));
+  };
+
+  const remove = (id) => {
+    updateStock((prev) => prev.filter((s) => s.id !== id));
+    setConfirmDeleteId(null);
+  };
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div>
+          <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
+            สต็อกวัตถุดิบ
+          </h1>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">
+            {stockItems.length} รายการ · ตัดอัตโนมัติเมื่อออเดอร์ทำเสร็จ
+          </p>
+        </div>
+        <button
+          onClick={startNew}
+          style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+          className="w-10 h-10 rounded-full flex items-center justify-center active:scale-90 transition-transform flex-shrink-0"
+        >
+          <Plus size={20} />
+        </button>
+      </div>
+
+      {/* แจ้งเตือนของใกล้หมด/หมด */}
+      {(outCount > 0 || lowCount > 0) && (
+        <div
+          style={{ background: outCount > 0 ? "#F3D9D3" : "#F5EAC9", color: outCount > 0 ? "#8A3A2B" : "#7A5B12" }}
+          className="rounded-2xl px-4 py-3 mb-4 flex items-center gap-2"
+        >
+          <AlertTriangle size={16} className="flex-shrink-0" />
+          <p className="text-xs font-semibold leading-relaxed">
+            {outCount > 0 && `${outCount} รายการหมดแล้ว`}
+            {outCount > 0 && lowCount > 0 && " · "}
+            {lowCount > 0 && `${lowCount} รายการใกล้หมด`}
+            {" "}— ไปซื้อของก่อนลูกค้าสั่งไม่ได้นะครับ
+          </p>
+        </div>
+      )}
+
+      {stockItems.length === 0 && (
+        <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
+          <Box size={32} className="mx-auto mb-2 opacity-50" />
+          ยังไม่มีรายการสต็อก
+          <p className="text-[11px] mt-1">เพิ่มวัตถุดิบ/ของคงเหลือ แล้วไปผูกกับเมนูที่หน้าจัดการเมนู เพื่อตัดสต็อกอัตโนมัติ</p>
+        </div>
+      )}
+
+      <div className="space-y-2.5">
+        {stockItems.map((s) => {
+          const st = statusOf(s);
+          const usedIn = stockUsage.get(s.id) || [];
+          return (
+            <div key={s.id} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{s.name}</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span style={{ background: st.bg, color: st.color }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {st.label}
+                    </span>
+                    {Number(s.minQty) > 0 && (
+                      <span style={{ color: COLORS.inkSoft }} className="text-[11px]">แจ้งเตือนที่ ≤ {s.minQty} {s.unit}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button onClick={() => adjust(s.id, -1)} style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }} className="w-7 h-7 rounded-lg flex items-center justify-center active:scale-90">
+                    <Minus size={13} />
+                  </button>
+                  <span style={{ color: COLORS.ink }} className="text-lg font-bold min-w-[52px] text-center">
+                    {Number(s.qty) || 0}
+                  </span>
+                  <button onClick={() => adjust(s.id, 1)} style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }} className="w-7 h-7 rounded-lg flex items-center justify-center active:scale-90">
+                    <Plus size={13} />
+                  </button>
+                </div>
+                <span style={{ color: COLORS.inkSoft }} className="text-[11px] w-8 flex-shrink-0">{s.unit}</span>
+                <button onClick={() => startEdit(s)} style={{ color: COLORS.inkSoft }} className="w-7 h-7 flex items-center justify-center flex-shrink-0">
+                  <Pencil size={14} />
+                </button>
+                <button onClick={() => setConfirmDeleteId(s.id)} style={{ color: "#C0533F" }} className="w-7 h-7 flex items-center justify-center flex-shrink-0">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-2 leading-relaxed">
+                {usedIn.length > 0
+                  ? `ใช้ในเมนู: ${usedIn.map((u) => `${u.menuName} (${u.per} ${s.unit}/หน่วย)`).join(" · ")}`
+                  : "ยังไม่ได้ผูกกับเมนูไหน — แก้เมนูแล้วเลือกวัตถุดิบนี้ที่หน้าจัดการเมนู"}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ยืนยันลบ */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <div onClick={() => setConfirmDeleteId(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">ลบรายการสต็อกนี้?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">เมนูที่ผูกวัตถุดิบนี้ไว้จะไม่ถูกตัดสต็อกอีก (สูตรยังอยู่แต่ไม่มีของให้ตัด)</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDeleteId(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
+                ยกเลิก
+              </button>
+              <button onClick={() => remove(confirmDeleteId)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+                ลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drawer เพิ่ม/แก้ไขสต็อก */}
+      {editing && (
+        <div className="fixed inset-0 z-20 flex flex-col justify-end">
+          <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
+                {editing === "new" ? "เพิ่มวัตถุดิบ" : "แก้ไขวัตถุดิบ"}
+              </h2>
+              <button onClick={() => setEditing(null)} style={{ color: COLORS.inkSoft }}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อวัตถุดิบ</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="เช่น ไข่มุกดำ, ชานม, ถ้วยกระดาษ"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                />
+              </div>
+              <div>
+                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">หน่วยนับ</label>
+                <select
+                  value={form.unit}
+                  onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="w-full rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+                >
+                  {STOCK_UNITS.map((u) => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จำนวนคงเหลือ</label>
+                  <input
+                    value={form.qty}
+                    onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value.replace(/[^0-9.]/g, "") }))}
+                    placeholder="0"
+                    inputMode="decimal"
+                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">แจ้งเตือนเมื่อ ≤</label>
+                  <input
+                    value={form.minQty}
+                    onChange={(e) => setForm((f) => ({ ...f, minQty: e.target.value.replace(/[^0-9.]/g, "") }))}
+                    placeholder="เช่น 10 (เว้นว่าง = ไม่เตือน)"
+                    inputMode="decimal"
+                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <PrimaryButton full onClick={save} disabled={!form.name.trim()}>
+                บันทึก
+              </PrimaryButton>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ================= STAFF ACCOUNTING VIEW (บัญชี) =================
+// ต้นทุน/กำไรต่อเมนู + สรุปแยกวิธีชำระ + บันทึกรายจ่ายรายวัน
+function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRound, updateSalesRound }) {
+  const [range, setRange] = useState("today"); // today | 7d | 30d | all
+  const [expForm, setExpForm] = useState({ title: "", amount: "", category: "วัตถุดิบ", note: "", date: todayKey() });
+  const [confirmDeleteExpense, setConfirmDeleteExpense] = useState(null);
+
+  // ---- รอบการขายรายวัน: เปิดรอบ → จดเบิก/ฝาก → ปิดรอบสรุปเงินสด ----
+  const [roundOpenForm, setRoundOpenForm] = useState({ cash: "", note: "" });
+  const [roundEntryForm, setRoundEntryForm] = useState({ type: "withdraw", amount: "", note: "" });
+  const [roundCloseForm, setRoundCloseForm] = useState({ cash: "", note: "" });
+  const [showRoundHistory, setShowRoundHistory] = useState(false);
+
+  const activeRound = salesRound && salesRound.active ? salesRound.active : null;
+  const roundHistory = (salesRound && salesRound.history) || [];
+
+  // ยอดขายเงินสดในรอบนี้ (ออร์เดอร์เงินสดที่ไม่ถูกยกเลิก ตั้งแต่เปิดรอบ) — ใช้ตัวเลขจริง ไม่ผูกกับช่วงเวลา
+  const cashSalesInRound = useMemo(() => {
+    if (!activeRound) return 0;
+    return orders
+      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt)
+      .reduce((s, o) => s + calcOrderTotal(o), 0);
+  }, [orders, activeRound]);
+
+  const roundDeposits = (entries) =>
+    (entries || []).filter((e) => e.type === "deposit").reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const roundWithdrawals = (entries) =>
+    (entries || []).filter((e) => e.type === "withdraw").reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const roundExpected = (entries) =>
+    (Number(activeRound && activeRound.openingCash) || 0) + cashSalesInRound + roundDeposits(entries) - roundWithdrawals(entries);
+
+  const openRound = () => {
+    const cash = Number(roundOpenForm.cash);
+    if (!roundOpenForm.cash || Number.isNaN(cash) || cash < 0) return;
+    updateSalesRound((prev) => ({
+      active: { id: nextSalesRoundId(), openedAt: Date.now(), openingCash: cash, note: roundOpenForm.note.trim(), entries: [] },
+      history: prev.history || [],
+    }));
+    setRoundOpenForm({ cash: "", note: "" });
+  };
+
+  const addRoundEntry = () => {
+    const amount = Number(roundEntryForm.amount);
+    if (!roundEntryForm.amount || Number.isNaN(amount) || amount <= 0 || !activeRound) return;
+    updateSalesRound((prev) => ({
+      ...prev,
+      active: {
+        ...prev.active,
+        entries: [...(prev.active.entries || []), { id: nextRoundEntryId(), type: roundEntryForm.type, amount, note: roundEntryForm.note.trim(), createdAt: Date.now() }],
+      },
+    }));
+    setRoundEntryForm((f) => ({ ...f, amount: "", note: "" }));
+  };
+
+  const removeRoundEntry = (eid) => {
+    if (!activeRound) return;
+    updateSalesRound((prev) => ({
+      ...prev,
+      active: { ...prev.active, entries: (prev.active.entries || []).filter((e) => e.id !== eid) },
+    }));
+  };
+
+  const closeRound = () => {
+    if (!activeRound) return;
+    const actual = Number(roundCloseForm.cash);
+    if (!roundCloseForm.cash || Number.isNaN(actual) || actual < 0) return;
+    const expected = roundExpected(activeRound.entries);
+    const record = {
+      id: activeRound.id,
+      openedAt: activeRound.openedAt,
+      closedAt: Date.now(),
+      openingCash: Number(activeRound.openingCash) || 0,
+      cashSales: cashSalesInRound,
+      expected,
+      actual,
+      diff: actual - expected,
+      note: roundCloseForm.note.trim(),
+      entries: activeRound.entries || [],
+    };
+    updateSalesRound((prev) => ({ active: null, history: [record, ...(prev.history || [])] }));
+    setRoundCloseForm({ cash: "", note: "" });
+  };
+
+  const rangeStart = useMemo(() => {
+    const now = new Date();
+    if (range === "all") return null;
+    if (range === "today") {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return d.getTime();
+    }
+    const days = range === "7d" ? 7 : 30;
+    return now.getTime() - days * 24 * 60 * 60 * 1000;
+  }, [range]);
+
+  const rangeLabels = { today: "วันนี้", "7d": "7 วันล่าสุด", "30d": "30 วันล่าสุด", all: "ทั้งหมด" };
+
+  // ยอดขายในช่วง (ไม่รวมที่ยกเลิก)
+  const sold = useMemo(() => {
+    const list = rangeStart === null ? orders : orders.filter((o) => o.createdAt >= rangeStart);
+    return list.filter((o) => o.status !== "cancelled");
+  }, [orders, rangeStart]);
+
+  // ต้นทุนของสินค้าแต่ละชิ้นในออร์เดอร์ — ต้นทุนตัวเมนู + ต้นทุนท็อปปิ้ง/แอดออนที่เลือก (ต้นทุน/หน่วย x จำนวน)
+  const costOfItem = (item) => {
+    const mi = menu.find((m) => m.id === item.menuId || m.name === item.name);
+    let cost = (mi && mi.cost != null ? Number(mi.cost) : 0) * item.qty;
+    (item.addOns || []).forEach((ao) => {
+      const opt = mi ? findMenuOption(mi, ao) : null;
+      if (opt && opt.cost != null) cost += Number(opt.cost) * item.qty;
+    });
+    return cost;
+  };
+
+  const totalRevenue = sold.reduce((s, o) => s + calcOrderTotal(o), 0);
+  const totalCost = sold.reduce((s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0), 0);
+  const grossProfit = totalRevenue - totalCost;
+
+  // รายจ่ายในช่วง (เรียงใหม่สุดก่อน)
+  const filteredExpenses = useMemo(() => {
+    const list = (expenses || []).filter((e) => rangeStart === null || (e.createdAt || 0) >= rangeStart);
+    return [...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [expenses, rangeStart]);
+  const totalExpense = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const netProfit = grossProfit - totalExpense;
+
+  // สรุปแยกตามวิธีชำระเงิน
+  const payStats = useMemo(() => {
+    const map = {
+      cash: { label: "เงินสด", amount: 0, count: 0 },
+      promptpay: { label: "โอน/พร้อมเพย์", amount: 0, count: 0 },
+      card: { label: "บัตร", amount: 0, count: 0 },
+    };
+    sold.forEach((o) => {
+      const key = o.paymentMethod === "cash" ? "cash" : o.paymentMethod === "card" ? "card" : "promptpay";
+      map[key].amount += calcOrderTotal(o);
+      map[key].count += 1;
+    });
+    return map;
+  }, [sold]);
+
+  // กำไร/ขาดทุนต่อเมนู (เมนูที่มีการขายในช่วง) — ต้นทุนรวมท็อปปิ้ง/แอดออนด้วย (ใช้ costOfItem)
+  const menuProfit = useMemo(() => {
+    const map = new Map();
+    sold.forEach((o) =>
+      (o.items || []).forEach((it) => {
+        const key = it.menuId || it.name;
+        if (!map.has(key)) map.set(key, { name: it.name, qty: 0, revenue: 0, cost: 0, hasCost: false });
+        const e = map.get(key);
+        e.qty += it.qty;
+        e.revenue += it.price * it.qty;
+        const c = costOfItem(it);
+        e.cost += c;
+        if (c > 0) e.hasCost = true;
+      })
+    );
+    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+  }, [sold]);
+
+  const addExpense = () => {
+    if (!expForm.title.trim() || !expForm.amount) return;
+    const amount = Number(expForm.amount);
+    if (Number.isNaN(amount) || amount <= 0) return;
+    const date = expForm.date || todayKey();
+    const ts = new Date(`${date}T00:00:00`).getTime();
+    updateExpenses((prev) => [
+      ...prev,
+      { id: nextExpenseId(), title: expForm.title.trim(), amount, category: expForm.category, note: expForm.note.trim(), createdAt: ts },
+    ]);
+    setExpForm((f) => ({ title: "", amount: "", category: f.category, note: "", date }));
+  };
+
+  const removeExpense = (id) => {
+    updateExpenses((prev) => prev.filter((e) => e.id !== id));
+    setConfirmDeleteExpense(null);
+  };
+
+  // ส่งออกรายงานบัญชีเป็น CSV (เปิดใน Excel ได้ — ใส่ BOM UTF-8 กันภาษาไทยเพี้ยน)
+  // ไฟล์เดียวรวม 3 ส่วน: สรุป + กำไรต่อเมนู + รายจ่าย (+ แยกวิธีชำระ) เพื่อยื่นภาษี/ส่งคนทำบัญชี
+  const exportAccounting = () => {
+    const BOM = "\uFEFF";
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const rows = [];
+    rows.push(["รายงานบัญชี", rangeLabels[range]]);
+    rows.push([]);
+    rows.push(["สรุป"]);
+    rows.push(["ยอดขาย (บาท)", totalRevenue]);
+    rows.push(["ต้นทุนวัตถุดิบ (บาท)", totalCost]);
+    rows.push(["กำไรขั้นต้น (บาท)", grossProfit]);
+    rows.push(["รายจ่ายรวม (บาท)", totalExpense]);
+    rows.push(["กำไรสุทธิ (บาท)", netProfit]);
+    rows.push([]);
+    rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
+    Object.values(payStats).forEach((p) => rows.push([p.label, p.count, p.amount]));
+    rows.push([]);
+    rows.push(["กำไรต่อเมนู", "ชิ้นที่ขาย", "รายได้ (บาท)", "ต้นทุน (บาท)", "กำไร (บาท)"]);
+    menuProfit.forEach((m) => rows.push([m.name, m.qty, m.revenue, m.cost, m.revenue - m.cost]));
+    rows.push([]);
+    rows.push(["รายจ่าย", "วันที่", "หมวด", "หมายเหตุ", "จำนวน (บาท)"]);
+    filteredExpenses.forEach((e) =>
+      rows.push([e.title, new Date(e.createdAt).toLocaleDateString("th-TH"), e.category, e.note || "", e.amount])
+    );
+    const csv = BOM + rows.map((r) => r.map(esc).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `รายงานบัญชี-${rangeLabels[range]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+        บัญชีร้าน
+      </h1>
+      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+        กำไร/ขาดทุนจากยอดขายจริง ลบต้นทุนวัตถุดิบและรายจ่าย — ไม่รวมออร์เดอร์ที่ยกเลิก
+      </p>
+
+      {/* ตัวเลือกช่วงเวลา */}
+      <div className="flex gap-1.5 mb-4">
+        {["today", "7d", "30d", "all"].map((r) => (
+          <button
+            key={r}
+            onClick={() => setRange(r)}
+            style={{
+              background: range === r ? COLORS.caramel : "#FFFFFF",
+              color: range === r ? "#FFF9F0" : COLORS.inkSoft,
+              border: `1px solid ${range === r ? COLORS.caramel : COLORS.line}`,
+            }}
+            className="flex-1 text-xs font-semibold py-2 rounded-full"
+          >
+            {rangeLabels[r]}
+          </button>
+        ))}
+      </div>
+
+      {/* ส่งออกรายงานบัญชี (Excel) */}
+      <button
+        onClick={exportAccounting}
+        disabled={sold.length === 0 && filteredExpenses.length === 0}
+        style={{
+          background: sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3",
+          color: sold.length > 0 || filteredExpenses.length > 0 ? "#FFF9F0" : "#A99A87",
+          border: `1px solid ${sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3"}`,
+        }}
+        className="w-full rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 mb-4 disabled:cursor-not-allowed"
+      >
+        <DownloadIcon size={13} /> ส่งออกรายงานบัญชี (Excel) — สรุป + กำไรต่อเมนู + รายจ่าย
+      </button>
+
+      {/* รอบการขายรายวัน — เปิดรอบ/จดเบิกฝาก/ปิดรอบ สรุปเงินสดตรง-เกิน-ขาด */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold flex items-center gap-1.5">
+            <Clock size={15} style={{ color: COLORS.caramelDark }} /> รอบการขายวันนี้
+          </p>
+          {roundHistory.length > 0 && (
+            <button
+              onClick={() => setShowRoundHistory((v) => !v)}
+              style={{ color: COLORS.inkSoft }}
+              className="text-[11px] font-semibold"
+            >
+              ประวัติรอบ ({roundHistory.length}) {showRoundHistory ? "▲" : "▼"}
+            </button>
+          )}
+        </div>
+
+        {!activeRound ? (
+          <div>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
+              ยังไม่ได้เปิดรอบ — เปิดตอนเริ่มวันเพื่อตรวจนับเงินสดปิดร้าน (เทียบยอดขายเงินสดกับเงินในลิ้นชัก)
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={roundOpenForm.cash}
+                onChange={(e) => setRoundOpenForm((f) => ({ ...f, cash: e.target.value.replace(/[^0-9.]/g, "") }))}
+                placeholder="เงินสดในลิ้นชัก (บาท)"
+                inputMode="decimal"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+              />
+              <input
+                value={roundOpenForm.note}
+                onChange={(e) => setRoundOpenForm((f) => ({ ...f, note: e.target.value }))}
+                placeholder="หมายเหตุ (ไม่บังคับ)"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+              />
+              <button
+                onClick={openRound}
+                disabled={!roundOpenForm.cash}
+                style={{ background: COLORS.ink, color: "#FFF9F0" }}
+                className="rounded-xl px-4 text-xs font-semibold disabled:opacity-40"
+              >
+                เปิดรอบ
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <div style={{ background: COLORS.paper }} className="rounded-xl px-3.5 py-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span style={{ color: COLORS.inkSoft }}>เปิดรอบเมื่อ</span>
+                <span style={{ color: COLORS.ink }} className="font-semibold">{new Date(activeRound.openedAt).toLocaleString("th-TH")}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span style={{ color: COLORS.inkSoft }}>เงินสดในลิ้นชักตอนเปิด</span>
+                <span style={{ color: COLORS.ink }} className="font-semibold">฿{Number(activeRound.openingCash) || 0}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span style={{ color: COLORS.inkSoft }}>ยอดขายเงินสดในรอบ</span>
+                <span style={{ color: COLORS.sage }} className="font-semibold">+฿{cashSalesInRound}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span style={{ color: COLORS.inkSoft }}>เงินที่ควรมีตอนนี้</span>
+                <span style={{ color: COLORS.ink }} className="font-bold">฿{roundExpected(activeRound.entries)}</span>
+              </div>
+              {activeRound.note && (
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px]">หมายเหตุ: {activeRound.note}</p>
+              )}
+            </div>
+
+            {/* รายการเบิก/ฝากระหว่างวัน */}
+            {(activeRound.entries || []).map((e) => (
+              <div key={e.id} className="flex items-center gap-2 text-xs">
+                <Chip tone={e.type === "withdraw" ? "caramel" : "sage"}>{e.type === "withdraw" ? "เบิก" : "ฝาก"}</Chip>
+                <span style={{ color: COLORS.ink }} className="font-bold flex-shrink-0">฿{Number(e.amount) || 0}</span>
+                {e.note && <span style={{ color: COLORS.inkSoft }} className="truncate flex-1">{e.note}</span>}
+                <span style={{ color: COLORS.inkSoft }} className="flex-shrink-0">
+                  {new Date(e.createdAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <button onClick={() => removeRoundEntry(e.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+
+            {/* ฟอร์มจดเบิก/ฝาก */}
+            <div className="flex gap-1.5">
+              <select
+                value={roundEntryForm.type}
+                onChange={(e) => setRoundEntryForm((f) => ({ ...f, type: e.target.value }))}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="rounded-xl px-2.5 py-2 text-[11px] bg-white outline-none"
+              >
+                <option value="withdraw">เบิก (เอาเงินออก)</option>
+                <option value="deposit">ฝาก (ใส่เงินเข้า)</option>
+              </select>
+              <input
+                value={roundEntryForm.amount}
+                onChange={(e) => setRoundEntryForm((f) => ({ ...f, amount: e.target.value.replace(/[^0-9.]/g, "") }))}
+                placeholder="บาท"
+                inputMode="decimal"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none text-center"
+              />
+              <input
+                value={roundEntryForm.note}
+                onChange={(e) => setRoundEntryForm((f) => ({ ...f, note: e.target.value }))}
+                placeholder="หมายเหตุ เช่น ฝากธนาคาร"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                className="flex-1 min-w-0 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+              />
+              <button
+                onClick={addRoundEntry}
+                disabled={!roundEntryForm.amount}
+                style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                className="rounded-xl px-3.5 text-xs font-semibold disabled:opacity-40"
+              >
+                จด
+              </button>
+            </div>
+
+            {/* ปิดรอบ */}
+            <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-2.5 space-y-1.5">
+              <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                ปิดรอบเมื่อเลิกงาน — กรอกยอดเงินสดจริงในลิ้นชัก ระบบจะสรุปว่าตรง/เกิน/ขาด
+              </p>
+              <div className="flex gap-2">
+                <input
+                  value={roundCloseForm.cash}
+                  onChange={(e) => setRoundCloseForm((f) => ({ ...f, cash: e.target.value.replace(/[^0-9.]/g, "") }))}
+                  placeholder="ยอดเงินสดจริงตอนปิด (บาท)"
+                  inputMode="decimal"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+                />
+                <input
+                  value={roundCloseForm.note}
+                  onChange={(e) => setRoundCloseForm((f) => ({ ...f, note: e.target.value }))}
+                  placeholder="หมายเหตุ (ไม่บังคับ)"
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+                />
+                <button
+                  onClick={closeRound}
+                  disabled={!roundCloseForm.cash}
+                  style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                  className="rounded-xl px-3.5 text-xs font-semibold disabled:opacity-40"
+                >
+                  ปิดรอบ
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ประวัติรอบที่ปิดแล้ว */}
+        {showRoundHistory && roundHistory.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {roundHistory.map((r) => (
+              <div key={r.id} style={{ background: COLORS.paper }} className="rounded-xl p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span style={{ color: COLORS.ink }} className="text-xs font-bold">
+                    {new Date(r.openedAt).toLocaleDateString("th-TH")}
+                  </span>
+                  <span
+                    style={{ color: r.diff === 0 ? COLORS.sage : r.diff > 0 ? "#B08628" : "#C0533F" }}
+                    className="text-xs font-bold"
+                  >
+                    {r.diff === 0 ? "ตรงเป๊ะ" : r.diff > 0 ? `เกิน ฿${r.diff}` : `ขาด ฿${Math.abs(r.diff)}`}
+                  </span>
+                </div>
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px] leading-relaxed">
+                  เปิด {new Date(r.openedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} ·{" "}
+                  ปิด {new Date(r.closedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} · เงินสดเปิด ฿{r.openingCash} ·{" "}
+                  ขายเงินสด ฿{r.cashSales} · ควรมี ฿{r.expected} · จริง ฿{r.actual}
+                </p>
+                {r.note && <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">หมายเหตุ: {r.note}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* การ์ดสรุปกำไร/ขาดทุน */}
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ยอดขาย (หลังหักส่วนลด)</p>
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ต้นทุนวัตถุดิบ (ขายแล้ว)</p>
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">-฿{totalCost.toLocaleString()}</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">กำไรขั้นต้น</p>
+          <p style={{ color: grossProfit >= 0 ? COLORS.sage : "#C0533F" }} className="text-lg font-bold">
+            ฿{grossProfit.toLocaleString()}
+          </p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">รายจ่ายในช่วงนี้</p>
+          <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{totalExpense.toLocaleString()}</p>
+        </div>
+      </div>
+      <div
+        style={{ background: netProfit >= 0 ? COLORS.sageSoft : "#F3D9D3", color: netProfit >= 0 ? COLORS.sage : "#8A3A2B" }}
+        className="rounded-2xl px-4 py-3 mb-5 flex items-center justify-between"
+      >
+        <span className="text-sm font-semibold flex items-center gap-1.5">
+          <TrendingUp size={16} /> กำไรสุทธิ (ยอดขาย − ต้นทุน − รายจ่าย)
+        </span>
+        <span className="text-lg font-bold">฿{netProfit.toLocaleString()}</span>
+      </div>
+
+      {/* สรุปแยกวิธีชำระเงิน */}
+      <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">สรุปแยกวิธีชำระเงิน</p>
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        {Object.values(payStats).map((p) => (
+          <div key={p.label} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{p.amount.toLocaleString()}</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-[11px]">{p.label} · {p.count} ออเดอร์</p>
+          </div>
+        ))}
+      </div>
+
+      {/* กำไร/ขาดทุนต่อเมนู */}
+      <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">กำไร/ขาดทุนต่อเมนู</p>
+      {menuProfit.length === 0 ? (
+        <div className="text-center py-8 mb-4" style={{ color: COLORS.inkSoft }}>
+          <Receipt size={26} className="mx-auto mb-2 opacity-50" />
+          ยังไม่มีออร์เดอร์ในช่วงนี้
+        </div>
+      ) : (
+        <div className="space-y-2 mb-5">
+          {menuProfit.map((m) => {
+            const profit = m.revenue - m.cost;
+            return (
+              <div key={m.name} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{m.name}</span>
+                  <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold flex-shrink-0">฿{m.revenue.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px]" style={{ color: COLORS.inkSoft }}>
+                  <span>{m.qty} ชิ้น</span>
+                  {m.hasCost ? (
+                    <>
+                      <span>· ต้นทุน ฿{m.cost.toLocaleString()}</span>
+                      <span style={{ color: profit >= 0 ? COLORS.sage : "#C0533F" }} className="font-bold">
+                        · กำไร ฿{profit.toLocaleString()}
+                      </span>
+                    </>
+                  ) : (
+                    <span>· ยังไม่ตั้งต้นทุน (ใส่ที่หน้าจัดการเมนู)</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* บันทึกรายจ่ายรายวัน */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-4">
+        <p style={{ color: COLORS.ink }} className="text-sm font-semibold flex items-center gap-1.5 mb-3">
+          <Wallet size={15} style={{ color: COLORS.caramelDark }} /> บันทึกรายจ่าย
+        </p>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={expForm.title}
+              onChange={(e) => setExpForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="ชื่อรายจ่าย เช่น ซื้อไข่มุก"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+              className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+            />
+            <input
+              value={expForm.amount}
+              onChange={(e) => setExpForm((f) => ({ ...f, amount: e.target.value.replace(/[^0-9.]/g, "") }))}
+              placeholder="บาท"
+              inputMode="decimal"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+              className="w-24 rounded-xl px-3 py-2.5 text-sm bg-white outline-none text-center"
+            />
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={expForm.category}
+              onChange={(e) => setExpForm((f) => ({ ...f, category: e.target.value }))}
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+              className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+            >
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={expForm.date}
+              onChange={(e) => setExpForm((f) => ({ ...f, date: e.target.value }))}
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+              className="flex-1 min-w-0 rounded-xl px-3 py-2.5 text-sm bg-white outline-none"
+            />
+            <button
+              onClick={addExpense}
+              disabled={!expForm.title.trim() || !expForm.amount}
+              style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+              className="rounded-xl px-4 flex items-center justify-center disabled:opacity-40"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* รายการรายจ่าย */}
+      {filteredExpenses.length === 0 ? (
+        <p style={{ color: COLORS.inkSoft }} className="text-xs text-center py-6">ยังไม่มีรายจ่ายบันทึกในช่วงนี้</p>
+      ) : (
+        <div className="space-y-2">
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold">รายจ่าย ({filteredExpenses.length} รายการ)</p>
+          {filteredExpenses.map((e) => (
+            <div key={e.id} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{e.title}</p>
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
+                  {e.category}
+                  {e.note ? ` · ${e.note}` : ""} · {new Date(e.createdAt).toLocaleDateString("th-TH")}
+                </p>
+              </div>
+              <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">-฿{Number(e.amount).toLocaleString()}</span>
+              <button onClick={() => setConfirmDeleteExpense(e.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ยืนยันลบรายจ่าย */}
+      {confirmDeleteExpense && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <div onClick={() => setConfirmDeleteExpense(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-4">ลบรายจ่ายรายการนี้?</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDeleteExpense(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
+                ยกเลิก
+              </button>
+              <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+                ลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StaffDashboardView({ orders }) {
   const [range, setRange] = useState("today"); // today | 7d | 30d | all
   const [expandedKey, setExpandedKey] = useState(null);
@@ -3972,7 +5463,7 @@ function StaffDashboardView({ orders }) {
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
-      <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
+      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
         สรุปยอดขาย
       </h1>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
@@ -4144,6 +5635,12 @@ function App() {
   // เดิมตอนโหลดหน้าครั้งแรกจะเห็นรูปที่เป็นลิงก์สต็อก แทนรูปจริงที่ร้านอัปโหลด จนกว่า Firestore จะตอบกลับมา
   const [menu, setMenu] = useState(FIREBASE_SYNC_ENABLED ? [] : initialMenu);
   const [promos, setPromos] = useState([]); // โปรโมชั่น — ซิงก์ผ่าน Firestore (config/promotions) เหมือนเมนู
+  const [stockItems, setStockItems] = useState([]); // สต็อกวัตถุดิบ — config/stock: [{ id, name, unit, qty, minQty }]
+  const [expenses, setExpenses] = useState([]); // รายจ่าย — config/expenses: [{ id, title, amount, category, note, createdAt }]
+  // รอบการขายรายวัน — config/salesRound: { active: {...} | null, history: [...] }
+  // active = รอบที่เปิดอยู่ตอนนี้ { id, openedAt, openingCash, note, entries: [{id,type,amount,note,createdAt}] }
+  // history = รอบที่ปิดแล้ว { id, openedAt, closedAt, openingCash, expected, actual, diff, note, entries }
+  const [salesRound, setSalesRound] = useState({ active: null, history: [] });
   const [staffMembers, setStaffMembers] = useState([]); // [{ uid, name }] รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids)
   const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
   const [cart, setCart] = useState([]);
@@ -4155,6 +5652,13 @@ function App() {
   const [lastPaymentMethod, setLastPaymentMethod] = useState(null);
   const [lastCustomer, setLastCustomer] = useState(null); // { name, houseNo } of the most recent order
   const [lastOrder, setLastOrder] = useState(null); // ออร์เดอร์ล่าสุดเต็มใบ — ใช้สร้างภาพหลักฐานการรับสินค้า
+  // ข้อมูลร้าน (ชื่อร้าน + โค้ด QR พร้อมเพย์) — ตั้งค่าได้ที่หน้าจัดการเมนูฝั่งพนักงาน ซิงก์แบบเรียลไทม์
+  // (ชื่อร้านแสดงที่หัวเมนูลูกค้า/ใบหลักฐาน QR ใช้รับเงินตอนชำระเงิน)
+  const [shopInfo, setShopInfo] = useState({
+    name: "น้ำหวาน & เบเกอรี่",
+    slogan: "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
+    qr: PROMPTPAY_QR_URL,
+  });
 
   // Staff access: only reachable via a link with ?staff=1, and only after a PIN.
   // Regular customers opening the shop link never see this — the switcher below
@@ -4335,7 +5839,17 @@ function App() {
       .onSnapshot(
         (doc) => {
           if (doc.exists && Array.isArray(doc.data().items)) {
-            setPromos(doc.data().items);
+            // จำนวนการใช้โค้ดเก็บแยกไว้ในฟิลด์ usage (แผนที่ key = id โปรโมชั่น) — ไม่ฝังใน items
+            // เพราะเครื่องลูกค้าต้องอัปเดตได้เฉพาะฟิลด์นี้ (rules กันไว้) ส่วน items ฝั่งพนักงานแก้เท่านั้น
+            const usageMap =
+              doc.data().usage && typeof doc.data().usage === "object" ? doc.data().usage : {};
+            setPromos(
+              doc.data().items.map((p) => ({
+                ...p,
+                _usage:
+                  usageMap[p.id] && typeof usageMap[p.id] === "object" ? usageMap[p.id] : null,
+              }))
+            );
           } else {
             // ยังไม่เคยสร้างเอกสาร — แสดงว่าไม่มีโปรโมชั่น (เอกสารจะถูกสร้างเองตอนพนักงานกดบันทึกครั้งแรก)
             // หมายเหตุ: ไม่สร้างเอกสารว่างที่นี่ เพราะเครื่องที่ไม่มีสิทธิ์เขียนจะวนลูป (เขียนพลาด -> ฟังซ้ำ -> เขียนอีก)
@@ -4349,6 +5863,88 @@ function App() {
       );
     return unsubscribe;
   }, []);
+
+  // ฟังสต็อกวัตถุดิบจาก Firestore — พนักงานแก้ที่แท็บสต็อก/ผูกกับเมนูแล้วทุกเครื่องเห็นทันที
+  // (เอกสารจะถูกสร้างเองตอนพนักงานบันทึกครั้งแรก — ไม่สร้างเอกสารว่างที่นี่ กันวนลูปบนเครื่องที่ไม่มีสิทธิ์)
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("stock")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && Array.isArray(doc.data().items)) {
+            setStockItems(doc.data().items);
+          } else {
+            setStockItems([]);
+          }
+        },
+        (err) => {
+          console.error("Firestore stock subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // ฟังรายจ่ายจาก Firestore — พนักงานเพิ่ม/ลบรายจ่ายที่แท็บบัญชีแล้วทุกเครื่องเห็นทันที
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("expenses")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && Array.isArray(doc.data().items)) {
+            setExpenses(doc.data().items);
+          } else {
+            setExpenses([]);
+          }
+        },
+        (err) => {
+          console.error("Firestore expenses subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // ฟังรอบการขายรายวันจาก Firestore — เปิด/ปิดรอบจากเครื่องไหน ทุกเครื่องเห็นสถานะเดียวกัน
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("salesRound")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && doc.data()) {
+            const d = doc.data();
+            setSalesRound({
+              active: d.active && typeof d.active === "object" ? d.active : null,
+              history: Array.isArray(d.history) ? d.history : [],
+            });
+          } else {
+            setSalesRound({ active: null, history: [] });
+          }
+        },
+        (err) => {
+          console.error("Firestore salesRound subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // เขียนรอบการขายกลับขึ้น Firestore — ใช้จากแท็บบัญชี (เปิด/จดเบิกฝาก/ปิดรอบ)
+  const updateSalesRound = (updater) => {
+    setSalesRound((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config")
+          .doc("salesRound")
+          .set(next)
+          .catch((err) => console.error("บันทึกรอบการขายขึ้น Firestore ไม่สำเร็จ:", err));
+      }
+      return next;
+    });
+  };
 
   // ฟังสถานะเปิด/ปิดร้านจาก Firestore แบบเดียวกับเมนู — ทุกเครื่อง (ลูกค้า+พนักงาน)
   // เห็นสถานะเดียวกันแบบเรียลไทม์ พนักงานกดปิดร้านจากเครื่องไหนก็ได้ ลูกค้าทุกคนเห็นทันที
@@ -4375,7 +5971,7 @@ function App() {
     return unsubscribe;
   }, []);
 
-  // สลับสถานะเปิด/ปิดร้าน — พนักงานกดจากหน้าออร์เดอร์ร้าน
+  // สลับสถานะเปิด/ปิดร้าน — พนักงานกดจากกรอบหัว (แสดงทุกแท็บ)
   const toggleShopOpen = () => {
     const next = !shopOpen;
     setShopOpen(next);
@@ -4386,17 +5982,128 @@ function App() {
     }
   };
 
+  // ฟังข้อมูลร้าน (ชื่อร้าน + QR) จาก Firestore — พนักงานแก้ที่หน้าจัดการเมนูแล้วทุกเครื่องเห็นทันที
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("shopInfo")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && doc.data()) {
+            const d = doc.data();
+            setShopInfo({
+              name: (d.name && String(d.name).trim()) || "น้ำหวาน & เบเกอรี่",
+              slogan: (d.slogan && String(d.slogan).trim()) || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
+              qr: d.qr || PROMPTPAY_QR_URL,
+            });
+          }
+        },
+        (err) => {
+          console.error("Firestore shopInfo subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // อัปเดตชื่อแท็บเบราว์เซอร์ให้ตรงกับชื่อร้านที่ตั้งไว้
+  useEffect(() => {
+    document.title = `${shopInfo.name} — สั่งอาหาร`;
+  }, [shopInfo.name]);
+
+  // บันทึกชื่อร้าน + รูป QR — เรียกจากหน้าจัดการเมนู (พนักงาน) / ใช้ค่าเดิมถ้าเว้นว่าง
+  const saveShopInfo = (info) => {
+    const next = {
+      name: (info.name || "").trim() || "น้ำหวาน & เบเกอรี่",
+      slogan: (info.slogan || "").trim() || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
+      qr: info.qr || PROMPTPAY_QR_URL,
+    };
+    setShopInfo(next);
+    if (FIREBASE_SYNC_ENABLED) {
+      db.collection("config")
+        .doc("shopInfo")
+        .set(next)
+        .catch((err) => console.error("บันทึกข้อมูลร้านขึ้น Firestore ไม่สำเร็จ:", err));
+    }
+  };
+
   // เขียนโปรโมชั่นกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ — ใช้จาก StaffPromoView
   const updatePromos = (updater) => {
     setPromos((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       if (FIREBASE_SYNC_ENABLED) {
-        db.collection("config").doc("promotions").set({ items: next }).catch((err) => {
-          console.error("บันทึกโปรโมชั่นขึ้น Firestore ไม่สำเร็จ:", err);
-        });
+        // ตัด _usage ออกก่อนเขียน (เป็นข้อมูลชั่วคราวที่ merge มาจากฟิลด์ usage ของเอกสาร ไม่ใช่ส่วนของ items)
+        const clean = (next || []).map(({ _usage, ...rest }) => rest);
+        // merge: true — กันทับฟิลด์ usage (จำนวนการใช้โค้ดที่ลูกค้าอัปเดต) ตอนพนักงานบันทึกโปรโมชั่น
+        db.collection("config")
+          .doc("promotions")
+          .set({ items: clean }, { merge: true })
+          .catch((err) => {
+            console.error("บันทึกโปรโมชั่นขึ้น Firestore ไม่สำเร็จ:", err);
+          });
       }
       return next;
     });
+  };
+
+  // เขียนสต็อกกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/นับสต็อก)
+  const updateStock = (updater) => {
+    setStockItems((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config")
+          .doc("stock")
+          .set({ items: next })
+          .catch((err) => console.error("บันทึกสต็อกขึ้น Firestore ไม่สำเร็จ:", err));
+      }
+      return next;
+    });
+  };
+
+  // เขียนรายจ่ายกลับขึ้น Firestore ทุกครั้งที่พนักงานเพิ่ม/ลบ
+  const updateExpenses = (updater) => {
+    setExpenses((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config")
+          .doc("expenses")
+          .set({ items: next })
+          .catch((err) => console.error("บันทึกรายจ่ายขึ้น Firestore ไม่สำเร็จ:", err));
+      }
+      return next;
+    });
+  };
+
+  // หักสต็อกอัตโนมัติเมื่อออเดอร์ถูกทำเสร็จ (สถานะ → done) — ใช้สูตร recipe ของแต่ละเมนู
+  // (เมนูไหนผูกวัตถุดิบอะไรไว้ กี่หน่วยต่อ 1 เสิร์ฟ ก็หักตามจำนวนที่สั่งจริง)
+  // รวมท็อปปิ้ง/แอดออนที่ลูกค้าเลือกด้วย — แต่ละตัวเลือกก็ผูก recipe ได้เหมือนเมนูหลัก
+  // ทำตอน "เสร็จแล้ว" ไม่ใช่ตอนสั่ง เพราะรู้แล้วว่าออเดอร์ถูกทำจริง (ออเดอร์ที่ยกเลิกจะไม่หัก)
+  const deductStockForOrder = (order) => {
+    if (!order || !Array.isArray(order.items)) return;
+    const needs = {}; // stockId -> จำนวนที่ต้องใช้รวม
+    (order.items || []).forEach((item) => {
+      const mi = menu.find((m) => m.id === item.menuId || m.name === item.name);
+      if (!mi) return;
+      // วัตถุดิบของตัวเมนูหลัก
+      Object.entries(mi.recipe || {}).forEach(([sid, qtyPer]) => {
+        const per = Number(qtyPer) || 0;
+        if (per > 0 && sid) needs[sid] = (needs[sid] || 0) + per * item.qty;
+      });
+      // วัตถุดิบของท็อปปิ้ง/แอดออนที่เลือก
+      (item.addOns || []).forEach((ao) => {
+        const opt = findMenuOption(mi, ao);
+        if (!opt || !opt.recipe) return;
+        Object.entries(opt.recipe).forEach(([sid, qtyPer]) => {
+          const per = Number(qtyPer) || 0;
+          if (per > 0 && sid) needs[sid] = (needs[sid] || 0) + per * item.qty;
+        });
+      });
+    });
+    const ids = Object.keys(needs);
+    if (ids.length === 0) return;
+    updateStock((prev) =>
+      prev.map((s) => (ids.includes(s.id) ? { ...s, qty: Math.max(0, (Number(s.qty) || 0) - needs[s.id]) } : s))
+    );
   };
 
   // รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids) — ซิงก์แบบเรียลไทม์:
@@ -4459,19 +6166,34 @@ function App() {
     // ถ้าจะการันตีไม่ซ้ำ 100% ในระบบจริง ควรทำ counter แยกด้วย Firestore transaction
     const orderNo = Number(String(Date.now()).slice(-4));
     // นับการใช้โค้ดส่วนลดเมื่อสั่งสำเร็จ — เพิ่มจำนวนครั้งที่ใช้ + จดเครื่องที่ใช้ (กันใช้ซ้ำถ้าเป็นแบบ 1 ครั้ง/คน)
+    // เขียนไปที่ฟิลด์ usage ของ config/promotions ด้วย FieldValue increment/arrayUnion (อัปเดตแบบอะตอมมิก)
+    // ทำไมไม่เขียนทับ items ทั้งก้อน: เครื่องลูกค้าไม่มีสิทธิ์เขียน config (rules กันไว้) —
+    // rules เปิดให้ลูกค้าอัปเดตได้เฉพาะฟิลด์ usage เท่านั้น พนักงานยังเขียนได้ทุกอย่างเหมือนเดิม
     const countPromoUse = () => {
       if (!discount || !discount.promoId) return;
-      updatePromos((prev) =>
-        prev.map((p) =>
-          p.id === discount.promoId
-            ? {
-                ...p,
-                uses: (Number(p.uses) || 0) + 1,
-                usedBy: p.perCustomer ? [...((p.usedBy || []).filter((u) => u !== uid)), uid] : p.usedBy || [],
-              }
-            : p
-        )
-      );
+      if (!FIREBASE_SYNC_ENABLED) {
+        // โหมดออฟไลน์ — อัปเดตเฉพาะ state ในเครื่อง (ไม่มี Firestore)
+        setPromos((prev) =>
+          prev.map((p) =>
+            p.id === discount.promoId
+              ? {
+                  ...p,
+                  uses: (Number(p.uses) || 0) + 1,
+                  usedBy: discount.perCustomer ? [...((p.usedBy || []).filter((u) => u !== uid)), uid] : p.usedBy || [],
+                }
+              : p
+          )
+        );
+        return;
+      }
+      const upd = { [`usage.${discount.promoId}.uses`]: firebase.firestore.FieldValue.increment(1) };
+      if (discount.perCustomer) {
+        upd[`usage.${discount.promoId}.usedBy`] = firebase.firestore.FieldValue.arrayUnion(uid);
+      }
+      db.collection("config")
+        .doc("promotions")
+        .update(upd)
+        .catch((err) => console.error("นับการใช้โค้ดไม่สำเร็จ:", err));
     };
     const newOrder = {
       orderNo,
@@ -4528,6 +6250,10 @@ function App() {
     // อัปเดต state ท้องถิ่นทันที (optimistic) — UI ตอบสนองไว ไม่ต้องรอ Firestore รอบกลับ
     // แล้วค่อยซิงก์ขึ้น Firestore ด้านหลัง (บนเครื่องที่มีสิทธิ์ อีกสักครู่ Firestore จะยืนยันสถานะเดียวกันอีกที)
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: next } : o)));
+    // หักสต็อกอัตโนมัติตอนออเดอร์ทำเสร็จ (ใหม่ → กำลังทำ → เสร็จแล้ว) — ตามสูตรวัตถุดิบที่ผูกไว้กับเมนู
+    if (next === "done") {
+      deductStockForOrder(order);
+    }
     if (FIREBASE_SYNC_ENABLED) {
       try {
         await db.collection("orders").doc(id).update({ status: next });
@@ -4588,7 +6314,7 @@ function App() {
   if (isStaffLink && staffChecking) {
     return (
       <div
-        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        style={{ fontFamily: "'Itim', sans-serif", background: COLORS.cream || "#FFF9F0" }}
         className="w-full min-h-screen flex flex-col items-center justify-center px-6"
       >
         <div className="w-full max-w-xs text-center">
@@ -4603,7 +6329,7 @@ function App() {
   if (isStaffLink && staffDenied) {
     return (
       <div
-        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        style={{ fontFamily: "'Itim', sans-serif", background: COLORS.cream || "#FFF9F0" }}
         className="w-full min-h-screen flex flex-col items-center justify-center px-6"
       >
         <div className="w-full max-w-xs text-center">
@@ -4655,7 +6381,7 @@ function App() {
   if (isStaffLink && staffCheckError) {
     return (
       <div
-        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        style={{ fontFamily: "'Itim', sans-serif", background: COLORS.cream || "#FFF9F0" }}
         className="w-full min-h-screen flex flex-col items-center justify-center px-6"
       >
         <div className="w-full max-w-xs text-center">
@@ -4689,7 +6415,7 @@ function App() {
   if (isStaffLink && !staffUnlocked) {
     return (
       <div
-        style={{ fontFamily: "'Inter', system-ui, sans-serif", background: COLORS.cream || "#FFF9F0" }}
+        style={{ fontFamily: "'Itim', sans-serif", background: COLORS.cream || "#FFF9F0" }}
         className="w-full min-h-screen flex flex-col items-center justify-center px-6"
       >
         <form onSubmit={handlePinSubmit} className="w-full max-w-xs">
@@ -4721,11 +6447,11 @@ function App() {
 
   return (
     <div
-      style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+      style={{ fontFamily: "'Itim', sans-serif" }}
       className="w-full min-h-screen flex flex-col items-center"
     >
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Itim&display=swap');
       `}</style>
 
       {/* Role switcher — only rendered once a staff PIN has been entered.
@@ -4737,7 +6463,7 @@ function App() {
           <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
             <div
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-              className="rounded-2xl p-1 flex gap-1 shadow-sm"
+              className="rounded-2xl p-1 flex gap-1 shadow-sm overflow-x-auto no-scrollbar"
             >
               {[
                 { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
@@ -4746,6 +6472,9 @@ function App() {
                 { id: "staff-promos", label: "โปรโมชั่น" },
                 { id: "staff-members", label: "พนักงาน" },
                 { id: "staff-dashboard", label: "ยอดขาย" },
+                { id: "staff-slips", label: "สลิป" },
+                { id: "staff-accounting", label: "บัญชี" },
+                { id: "staff-stock", label: "สต็อก" },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -4754,12 +6483,32 @@ function App() {
                     background: role === t.id ? COLORS.ink : "transparent",
                     color: role === t.id ? "#FFF9F0" : COLORS.inkSoft,
                   }}
-                  className="flex-1 text-xs font-semibold py-2 rounded-xl transition-colors"
+                  className="flex-shrink-0 whitespace-nowrap px-2.5 text-xs font-semibold py-2 rounded-xl transition-colors"
                 >
                   {t.label}
                 </button>
               ))}
             </div>
+
+            {/* ปุ่มเปิด/ปิดร้าน — สวิตช์แบบตัวอย่างที่ขอไว้ อยู่บนกรอบแท็บ แสดงทุกหน้า */}
+            <button
+              onClick={toggleShopOpen}
+              className="mt-2 w-full rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm active:scale-[0.99] transition-transform"
+              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+            >
+              <span
+                className="w-12 h-7 rounded-full relative flex-shrink-0"
+                style={{ background: shopOpen ? "#7D8773" : "#D9CFC2", transition: "background 0.2s" }}
+              >
+                <span
+                  className="absolute top-[3px] w-[22px] h-[22px] rounded-full bg-white shadow-sm"
+                  style={{ left: shopOpen ? "calc(100% - 25px)" : "3px", transition: "left 0.2s" }}
+                />
+              </span>
+              <span style={{ color: COLORS.ink }} className="text-sm font-semibold text-left">
+                {shopOpen ? "เปิดใช้ (ลูกค้าเห็นทันที)" : "ปิดใช้ (ลูกค้าสั่งของไม่ได้)"}
+              </span>
+            </button>
           </div>
 
         </>
@@ -4775,6 +6524,8 @@ function App() {
             shopOpen={shopOpen}
             menuLoaded={menuLoaded}
             promos={promos}
+            shopName={shopInfo.name}
+            shopSlogan={shopInfo.slogan}
           />
         )}
         {role === "customer" && customerStage === "checkout" && (
@@ -4785,6 +6536,7 @@ function App() {
             orders={orders}
             promos={promos}
             uid={uid}
+            shopQr={shopInfo.qr}
           />
         )}
         {role === "customer" && customerStage === "success" && (
@@ -4794,6 +6546,7 @@ function App() {
             onNewOrder={() => setCustomerStage("menu")}
             paymentMethod={lastPaymentMethod}
             order={lastOrder}
+            shopName={shopInfo.name}
           />
         )}
         {role === "staff-orders" && (
@@ -4804,17 +6557,36 @@ function App() {
             onCancel={cancelOrder}
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
-            shopOpen={shopOpen}
-            onToggleShopOpen={toggleShopOpen}
           />
         )}
         {role === "staff-delivery" && <StaffDeliveryView orders={orders} onAdvance={advanceOrder} />}
-        {role === "staff-menu" && <MenuManagerView menu={menu} setMenu={updateMenu} menuLoaded={menuLoaded} />}
+        {role === "staff-menu" && (
+          <MenuManagerView
+            menu={menu}
+            setMenu={updateMenu}
+            menuLoaded={menuLoaded}
+            shopInfo={shopInfo}
+            onSaveShopInfo={saveShopInfo}
+            stockItems={stockItems}
+          />
+        )}
         {role === "staff-promos" && <StaffPromoView promos={promos} updatePromos={updatePromos} menu={menu} />}
         {role === "staff-members" && (
           <StaffMembersView uid={uid} staffMembers={staffMembers} onAdd={addStaffUid} onRemove={removeStaffUid} onRename={renameStaffUid} />
         )}
         {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
+        {role === "staff-slips" && <StaffSlipsView orders={orders} />}
+        {role === "staff-accounting" && (
+          <StaffAccountingView
+            orders={orders}
+            menu={menu}
+            expenses={expenses}
+            updateExpenses={updateExpenses}
+            salesRound={salesRound}
+            updateSalesRound={updateSalesRound}
+          />
+        )}
+        {role === "staff-stock" && <StaffStockView stockItems={stockItems} updateStock={updateStock} menu={menu} />}
       </div>
     </div>
   );
