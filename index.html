@@ -3868,6 +3868,11 @@ function StaffDashboardView({ orders }) {
     [filteredOrders]
   );
   const cancelledInRange = filteredOrders.length - soldOrders.length;
+  // รายการที่ยกเลิกในช่วงที่เลือก — แยกไว้อีกส่วน เพื่อเก็บสาเหตุการยกเลิกทีหลัง
+  const cancelledOrders = useMemo(
+    () => filteredOrders.filter((o) => o.status === "cancelled").sort((a, b) => b.createdAt - a.createdAt),
+    [filteredOrders]
+  );
 
   // รวมยอดต่อเมนู: จำนวนที่ขาย, ยอดขายรวม (รวมตัวเลือกเสริมแล้ว), และรายละเอียด
   // ตัวเลือกเสริมที่ลูกค้าเลือก (เช่น แยกน้ำแข็ง กี่ครั้ง, เพิ่มไข่มุก กี่ครั้ง)
@@ -3902,6 +3907,69 @@ function StaffDashboardView({ orders }) {
     all: "ทั้งหมด",
   };
 
+  // ดาวน์โหลดไฟล์ CSV (เปิดใน Excel ได้ รองรับภาษาไทย) — ใส่ BOM UTF-8 กันภาษาไทยเพี้ยน
+  const downloadCsv = (filename, rows) => {
+    const BOM = "\uFEFF";
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const csv = BOM + rows.map((r) => r.map(esc).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // รวมรายการสินค้าของออร์เดอร์เป็นข้อความเดียว (ชื่อ xจำนวน + ท็อปปิ้ง) สำหรับลงไฟล์
+  const formatItems = (o) =>
+    (o.items || [])
+      .map((i) => {
+        const addOns = (i.addOns || []).map((a) => `+${a.name}`).join(" ");
+        return `${i.name} x${i.qty}${addOns ? " (" + addOns + ")" : ""}`;
+      })
+      .join(" | ");
+
+  const exportSales = () => {
+    const rows = [
+      ["เลขออร์เดอร์", "วันที่สั่ง", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "ส่วนลด (บาท)", "วิธีชำระเงิน", "สถานะ"],
+      ...soldOrders.map((o) => [
+        o.orderNo,
+        new Date(o.createdAt).toLocaleString("th-TH"),
+        o.customerName || "",
+        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
+        formatItems(o),
+        calcOrderTotal(o),
+        (o.discount && o.discount.baht) || 0,
+        o.paymentMethod === "cash" ? "เงินสด" : o.paymentMethod === "promptpay" ? "พร้อมเพย์" : "บัตร",
+        o.status,
+      ]),
+    ];
+    downloadCsv(`ยอดขาย-${rangeLabels[range]}.csv`, rows);
+  };
+
+  const exportCancelled = () => {
+    const rows = [
+      ["เลขออร์เดอร์", "วันที่สั่ง", "วันที่ยกเลิก", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "สาเหตุที่ยกเลิก"],
+      ...cancelledOrders.map((o) => [
+        o.orderNo,
+        new Date(o.createdAt).toLocaleString("th-TH"),
+        o.cancelledAt ? new Date(o.cancelledAt).toLocaleString("th-TH") : "",
+        o.customerName || "",
+        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
+        formatItems(o),
+        calcOrderTotal(o),
+        o.cancelReason || "",
+      ]),
+    ];
+    downloadCsv(`ที่ยกเลิก-${rangeLabels[range]}.csv`, rows);
+  };
+
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <h1 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
@@ -3928,6 +3996,34 @@ function StaffDashboardView({ orders }) {
             {rangeLabels[r]}
           </button>
         ))}
+      </div>
+
+      {/* ส่งออกข้อมูลเป็น Excel (CSV เปิดใน Excel ได้) */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={exportSales}
+          disabled={soldOrders.length === 0}
+          style={{
+            background: soldOrders.length > 0 ? COLORS.sage : "#E3DDD3",
+            color: soldOrders.length > 0 ? "#FFF9F0" : "#A99A87",
+            border: `1px solid ${soldOrders.length > 0 ? COLORS.sage : "#E3DDD3"}`,
+          }}
+          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+        >
+          <DownloadIcon size={13} /> ส่งออกยอดขาย (Excel)
+        </button>
+        <button
+          onClick={exportCancelled}
+          disabled={cancelledOrders.length === 0}
+          style={{
+            background: cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3",
+            color: cancelledOrders.length > 0 ? "#FFF9F0" : "#A99A87",
+            border: `1px solid ${cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3"}`,
+          }}
+          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+        >
+          <DownloadIcon size={13} /> ส่งออกที่ยกเลิก (Excel)
+        </button>
       </div>
 
       {/* การ์ดสรุปตัวเลข */}
@@ -4001,6 +4097,39 @@ function StaffDashboardView({ orders }) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* รายการที่ยกเลิก — แยกไว้อีกส่วน ดูสาเหตุการยกเลิกย้อนหลังได้ และส่งออก Excel แยกต่างหาก */}
+      {cancelledOrders.length > 0 && (
+        <div className="mt-8">
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">
+            รายการที่ยกเลิก ({cancelledOrders.length})
+          </p>
+          <div className="space-y-2">
+            {cancelledOrders.map((o) => (
+              <div
+                key={o.id}
+                style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+                className="rounded-2xl p-3.5"
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
+                    #{o.orderNo} · {o.customerName || "ไม่ระบุชื่อ"}
+                  </span>
+                  <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">฿{calcOrderTotal(o)}</span>
+                </div>
+                <p style={{ color: COLORS.inkSoft }} className="text-xs mb-1.5">
+                  {new Date(o.createdAt).toLocaleString("th-TH")} · {o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง"}
+                </p>
+                {o.cancelReason && (
+                  <p style={{ background: "#F3D9D3", color: "#8A3A2B" }} className="text-[11px] font-medium rounded-lg px-2 py-1.5 inline-flex items-center gap-1">
+                    <X size={10} /> สาเหตุ: {o.cancelReason}
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
