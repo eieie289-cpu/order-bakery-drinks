@@ -4127,8 +4127,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                     className="relative inline-block"
                   >
                     <span
-                      style={{ left: form.active ? 20 : 3, background: "#FFF", width: 16, height: 16, borderRadius: 999 }}
-                      className="absolute top-[3px] transition-all"
+                      style={{ left: form.active ? 20 : 3, background: "#FFF", width: 16, height: 16, borderRadius: 999, top: 3 }}
+                      className="absolute transition-all"
                     />
                   </span>
                   <span style={{ color: COLORS.ink }} className="text-sm font-medium">
@@ -6474,7 +6474,7 @@ function App() {
                 />
               </span>
               <span style={{ color: COLORS.ink }} className="text-sm font-semibold text-left">
-                {shopOpen ? "เปิดใช้ (ลูกค้าเห็นทันที)" : "ปิดใช้ (ลูกค้าสั่งของไม่ได้)"}
+                {shopOpen ? "เปิดร้านอยู่ — ลูกค้าสั่งของได้" : "ปิดร้านอยู่ — ลูกค้าสั่งของไม่ได้"}
               </span>
             </button>
           </div>
