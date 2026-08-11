@@ -1606,23 +1606,10 @@ function drawOrderReceipt(order) {
   const W = 640;
   const M = 28;
 
-  // คำนวณความสูงใบตามจำนวนรายการ
-  let itemH = 0;
-  items.forEach((i) => {
-    itemH += 46;
-    if (i.addOns && i.addOns.length) itemH += 22 * i.addOns.length;
-    if (i.note && i.note.trim()) itemH += 30;
-  });
-  const H = 260 + itemH + 130;
-
   const canvas = document.createElement("canvas");
   canvas.width = W;
-  canvas.height = H;
+  canvas.height = 10; // ความสูงจริงจะตั้งใหม่หลังคำนวณเนื้อหาเสร็จ (ด้านล่าง)
   const ctx = canvas.getContext("2d");
-
-  // พื้นหลังครีม
-  ctx.fillStyle = "#FBF3E7";
-  ctx.fillRect(0, 0, W, H);
 
   const text = (str, x, y, size, weight, color, align = "left") => {
     ctx.font = `${weight || 500} ${size}px sans-serif`;
@@ -1647,6 +1634,25 @@ function drawOrderReceipt(order) {
     if (cur) lines.push(cur);
     return lines;
   };
+
+  // คำนวณความสูงใบให้พอดีกับเนื้อหาจริง (กันตัดท้ายใบเมื่อมีหลายรายการ/ท็อปปิ้ง/หมายเหตุ/ส่วนลด)
+  let itemH = 0;
+  items.forEach((i) => {
+    itemH += 28;
+    const nameLines = Math.min(2, wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).length);
+    itemH += (nameLines - 1) * 24;
+    itemH += 22 * ((i.addOns && i.addOns.length) || 0);
+    if (i.note && i.note.trim()) itemH += 30;
+  });
+  // แถวข้อมูลลูกค้า: รับที่ร้าน = 3 แถว (ชื่อ, วิธีรับ, ชำระเงิน) / จัดส่ง+มีวันเวลา = 4 แถว
+  const infoRows = order.method === "delivery" && order.deliveryDate && order.deliveryTime ? 4 : 3;
+  // 214 (เริ่มข้อมูล) + แถวข้อมูล + ช่องว่าง + หัวตาราง + รายการ + เส้นคั่น + ส่วนลด + ยอดรวม + ท้ายใบ 2 บรรทัด + ขอบล่าง
+  const H = 214 + infoRows * 27 + 16 + 40 + itemH + 42 + (discount > 0 ? 24 : 0) + 44 + 70;
+  canvas.height = H; // ตั้งความสูงจริง (ล้าง canvas แล้ววาดทับด้วยความสูงที่พอดี)
+
+  // พื้นหลังครีม
+  ctx.fillStyle = "#FBF3E7";
+  ctx.fillRect(0, 0, W, H);
 
   // ส่วนหัวร้าน + เลขออร์เดอร์
   text("น้ำหวาน & เบเกอรี่", W / 2, 62, 34, 700, "#B5652E", "center");
