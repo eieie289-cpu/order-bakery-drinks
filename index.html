@@ -178,14 +178,63 @@ const nextAddOnId = () => `ao${addOnIdCounter++}`;
 let addOnGroupIdCounter = 100;
 const nextAddOnGroupId = () => `g${addOnGroupIdCounter++}`;
 
+// ตั้งค่าเลขลำดับ id ของ add-on ให้ต่อจาก id ที่มีอยู่แล้วในเมนูปัจจุบัน
+// (กัน id ซ้ำข้าม session — เดิม id เริ่มนับที่ 100 ใหม่ทุกครั้งที่โหลดหน้า ทำให้ id ที่สร้างคนละครั้งชนกัน
+// เช่น มี "ao100" สองตัวคนละกลุ่ม พอกดตัวเลือกหนึ่ง ตัวเลือกอีกกลุ่มถูกติ๊กตามไปด้วย)
+const seedAddOnCounters = (menu) => {
+  let max = 100;
+  const consider = (id) => {
+    const n = parseInt(String(id || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  };
+  (menu || []).forEach((m) => {
+    (m.addOns || []).forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      if (Array.isArray(entry.options)) {
+        consider(entry.id); // group id
+        entry.options.forEach((o) => consider(o.id)); // option ids
+      } else if (entry.id) {
+        consider(entry.id); // legacy flat option
+      }
+    });
+  });
+  addOnIdCounter = max + 1;
+  addOnGroupIdCounter = max + 1;
+};
+
 // แปลงข้อมูลตัวเลือกเพิ่มให้เป็นรูปแบบ "กลุ่ม" เสมอ — รองรับข้อมูลเก่า (list ราบ [{id,name,price}])
-// ที่ยังหลงเหลืออยู่ (เช่น เมนูที่บันทึกไว้ก่อนหน้านี้ใน Firestore) ด้วย โดยมองเป็น 1 กลุ่มที่ไม่บังคับเลือก
+// และข้อมูลที่บันทึกแบบไม่ครบโครงสร้าง (เช่น [{id,name}] ไม่มีราคา) ด้วย โดยมองเป็น 1 กลุ่มที่ไม่บังคับเลือก
 const normalizeAddOnGroups = (addOns) => {
   if (!Array.isArray(addOns)) return [];
-  if (addOns.length > 0 && addOns[0] && "price" in addOns[0] && !("options" in addOns[0])) {
-    return [{ id: "g-legacy", name: "", required: false, options: addOns }];
+  const first = addOns[0];
+  if (first && typeof first === "object" && !Array.isArray(first.options)) {
+    // เป็นตัวเลือกเดี่ยวแบบเก่า (ไม่ใช่กลุ่ม) — ราคาที่หายไปให้ถือเป็น 0 บาท
+    return [{
+      id: "g-legacy",
+      name: "",
+      required: false,
+      options: addOns.map((a) => ({ id: a.id, name: a.name || "", price: Number(a.price) || 0 })),
+    }];
   }
   return addOns;
+};
+
+// ก่อนบันทึก ให้การันตีว่า id ของกลุ่ม/ตัวเลือกในเมนูนี้ไม่ซ้ำกัน — ถ้าข้อมูลเก่ามี id ซ้ำ
+// (จากบั๊กเดิมที่ id เริ่มนับใหม่ทุก session) จะสร้าง id ใหม่ให้ตัวที่ซ้ำทันที
+const ensureUniqueAddOnIds = (groups) => {
+  const seen = new Set();
+  return (groups || []).map((g) => {
+    let gid = g.id;
+    if (seen.has(gid)) gid = nextAddOnGroupId();
+    seen.add(gid);
+    const options = (g.options || []).map((o) => {
+      let oid = o.id;
+      if (seen.has(oid)) oid = nextAddOnId();
+      seen.add(oid);
+      return { ...o, id: oid };
+    });
+    return { ...g, id: gid, options };
+  });
 };
 
 // ---------- Delivery scheduling helpers ----------
@@ -384,7 +433,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
   const [addOnSheetFor, setAddOnSheetFor] = useState(null); // menu item currently picking add-ons for
-  const [selectedAddOnIds, setSelectedAddOnIds] = useState([]);
+  // ตัวเลือกที่เลือกไว้ เก็บเป็นคีย์ "groupId::optionId" — กันกรณี id ตัวเลือกซ้ำกันคนละกลุ่ม
+  // (ข้อมูลเก่าที่บันทึกด้วยบั๊ก id ซ้ำ) ทำให้กดตัวเลือกหนึ่งแล้วไปติ๊กอีกตัวเลือกในกลุ่มอื่นตาม
+  const [selectedAddOnKeys, setSelectedAddOnKeys] = useState([]);
 
   const categories = ["all", ...Object.keys(CATEGORY_LABEL)];
   const visibleMenu = menu.filter(
@@ -424,17 +475,18 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
 
   const openAddOnSheet = (item) => {
     setAddOnSheetFor(item);
-    setSelectedAddOnIds([]);
+    setSelectedAddOnKeys([]);
   };
 
-  const toggleAddOn = (id) => {
-    setSelectedAddOnIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggleAddOn = (groupId, optionId) => {
+    const key = `${groupId}::${optionId}`;
+    setSelectedAddOnKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
   const confirmAddOnSheet = () => {
     const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
-    const allOptions = groups.flatMap((g) => g.options || []);
-    const selected = allOptions.filter((a) => selectedAddOnIds.includes(a.id));
+    const allOptions = groups.flatMap((g) => (g.options || []).map((o) => ({ ...o, gid: g.id })));
+    const selected = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
     addToCart(addOnSheetFor, selected);
     setAddOnSheetFor(null);
   };
@@ -621,15 +673,16 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
       {/* Add-on picker sheet — opens when a menu item has selectable extras */}
       {addOnSheetFor && (() => {
         const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
-        const allOptions = groups.flatMap((g) => g.options || []);
+        const allOptions = groups.flatMap((g) => (g.options || []).map((o) => ({ ...o, gid: g.id })));
+        const selectedOptions = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
         // กลุ่มที่บังคับเลือก ต้องมีตัวเลือกอย่างน้อย 1 รายการที่ถูกเลือก ถึงจะกดยืนยันได้
         const missingRequired = groups.some(
-          (g) => g.required && !(g.options || []).some((o) => selectedAddOnIds.includes(o.id))
+          (g) => g.required && !(g.options || []).some((o) => selectedAddOnKeys.includes(`${g.id}::${o.id}`))
         );
         return (
           <div className="fixed inset-0 z-20 flex flex-col justify-end">
             <div onClick={() => setAddOnSheetFor(null)} className="absolute inset-0 bg-black/30" />
-            <div style={{ background: COLORS.cream }} className="relative rounded-t-[28px] p-5 pb-8">
+            <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
               <div className="flex items-center justify-between mb-1">
                 <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
                   {addOnSheetFor.name}
@@ -662,11 +715,11 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
                     </div>
                     <div className="space-y-2">
                       {[...(g.options || [])].sort((a, b) => a.price - b.price).map((a) => {
-                        const checked = selectedAddOnIds.includes(a.id);
+                        const checked = selectedAddOnKeys.includes(`${g.id}::${a.id}`);
                         return (
                           <button
                             key={a.id}
-                            onClick={() => toggleAddOn(a.id)}
+                            onClick={() => toggleAddOn(g.id, a.id)}
                             style={{
                               background: checked ? COLORS.peachSoft : "#FFFFFF",
                               border: `1.5px solid ${checked ? COLORS.caramel : COLORS.line}`,
@@ -700,10 +753,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen }) {
               )}
               <PrimaryButton full onClick={confirmAddOnSheet} disabled={missingRequired}>
                 เพิ่มลงตะกร้า · ฿
-                {addOnSheetFor.price + selectedAddOnIds.reduce((s, id) => {
-                  const a = allOptions.find((x) => x.id === id);
-                  return s + (a ? a.price : 0);
-                }, 0)}
+                {addOnSheetFor.price + selectedOptions.reduce((s, a) => s + a.price, 0)}
               </PrimaryButton>
             </div>
           </div>
@@ -1225,6 +1275,8 @@ function MenuManagerView({ menu, setMenu }) {
   const [newOptionPrice, setNewOptionPrice] = useState({}); // groupId -> ราคาที่กำลังพิมพ์
 
   const startEdit = (item) => {
+    // ให้เลข id ใหม่ต่อจาก id ที่มีอยู่แล้วในเมนู (กัน id ซ้ำข้าม session)
+    seedAddOnCounters(menu);
     setEditing(item.id);
     // แปลงข้อมูลเก่า (list ราบ) ให้เป็น "กลุ่ม" แล้วเรียงตัวเลือกในแต่ละกลุ่มตามราคาน้อยไปมาก
     const groups = normalizeAddOnGroups(item.addOns).map((g) => ({
@@ -1237,6 +1289,7 @@ function MenuManagerView({ menu, setMenu }) {
   };
 
   const startNew = () => {
+    seedAddOnCounters(menu);
     setEditing("new");
     setForm({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [] });
     setNewOptionName({});
@@ -1305,15 +1358,17 @@ function MenuManagerView({ menu, setMenu }) {
   const save = () => {
     if (!form.name.trim() || !form.price) return;
     const priceNum = Number(form.price);
+    // ซ่อม id ซ้ำ (ข้อมูลเก่า) ให้อัตโนมัติก่อนบันทึก — ตัวที่ซ้ำจะได้ id ใหม่ ไม่ชนกันอีก
+    const addOns = ensureUniqueAddOnIds(form.addOns);
     if (editing === "new") {
       setMenu((prev) => [
         ...prev,
-        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: true, img: form.img, addOns: form.addOns },
+        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: true, img: form.img, addOns },
       ]);
     } else {
       setMenu((prev) =>
         prev.map((m) =>
-          m.id === editing ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns: form.addOns } : m
+          m.id === editing ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns } : m
         )
       );
     }
@@ -1406,7 +1461,8 @@ function MenuManagerView({ menu, setMenu }) {
       {editing && (
         <div className="fixed inset-0 z-20 flex flex-col justify-end">
           <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream }} className="relative rounded-t-[28px] p-5 pb-8">
+          {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
+          <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ fontFamily: "Fraunces, serif", color: COLORS.ink }} className="text-lg font-semibold">
                 {editing === "new" ? "เพิ่มเมนูใหม่" : "แก้ไขเมนู"}
