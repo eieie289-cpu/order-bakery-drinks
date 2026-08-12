@@ -2254,6 +2254,33 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
     setConfirmDelCat(null);
   };
 
+  // สร้างภาพลาก (drag image) ให้เป็นกล่องเล็ก ๆ ตามชื่อเมนู/หมวด — กันเบราว์เซอร์แสดงภาพลากเป็นกล่องขาว/ใหญ่เกิน
+  // (ตอนนี้ลากได้ทั้งการ์ด ไม่ใช่แค่ที่จับ ☰ — ต้องตั้ง drag image เองทุกครั้ง)
+  const makeDragImage = (label) => {
+    const el = document.createElement("div");
+    el.textContent = label;
+    Object.assign(el.style, {
+      position: "fixed",
+      left: "-9999px",
+      top: 0,
+      background: COLORS.ink,
+      color: "#FFF9F0",
+      padding: "8px 14px",
+      borderRadius: "10px",
+      fontSize: "13px",
+      fontWeight: 600,
+      fontFamily: "'Itim', sans-serif",
+      whiteSpace: "nowrap",
+      maxWidth: "60vw",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+    });
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.remove());
+    return el;
+  };
+
   // ปล่อยเมนูลงบนการ์ดอื่น — หมวดเดียวกัน = สลับตำแหน่ง / หมวดต่างกัน = ย้ายไปหมวดนั้น (วางต่อท้ายตัวที่ปล่อยลงบน)
   const dropItem = (src, dst) => {
     if (!src || !dst || src.id === dst.id) return;
@@ -2823,30 +2850,37 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           {(categories || DEFAULT_CATEGORIES).map((c) => (
             <div
               key={c.id}
-              draggable={false}
+              draggable
               data-cat-id={c.id}
+              onDragStart={(e) => {
+                setDragCat(c.id);
+                setOverCat(c.id);
+                e.dataTransfer.effectAllowed = "move";
+                try {
+                  e.dataTransfer.setData("text/plain", c.id);
+                  e.dataTransfer.setDragImage(makeDragImage(c.label), 12, 12);
+                } catch (_) {}
+              }}
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overCat !== c.id) setOverCat(c.id); }}
               onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget)) return; setOverCat((o) => (o === c.id ? null : o)); }}
               onDrop={(e) => { e.preventDefault(); dropCategory(c.id); setDragCat(null); setOverCat(null); }}
-              className="flex items-center justify-between rounded-xl px-3 py-2.5 transition-colors"
+              onDragEnd={() => { setDragCat(null); setOverCat(null); }}
+              className="cursor-grab active:cursor-grabbing flex items-center justify-between rounded-xl px-3 py-2.5 transition-colors"
               style={{
                 background: overCat === c.id ? COLORS.peachSoft : COLORS.cream,
                 border: overCat === c.id ? `1.5px solid ${COLORS.caramel}` : `1px solid ${COLORS.line}`,
               }}
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                {/* ที่จับลาก — ลากเพื่อเรียงลำดับหมวด (ลูกค้าเห็นแท็บเรียงตามนี้) — ใช้ได้ทั้งเมาส์และนิ้ว */}
+                {/* ที่จับลาก — ลากทั้งแถวได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
                 <div
-                  draggable
-                  onDragStart={(e) => { setDragCat(c.id); setOverCat(c.id); e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", c.id); } catch (_) {} }}
-                  onDragEnd={() => { setDragCat(null); setOverCat(null); }}
                   data-touch-grip
                   data-touch-kind="cat"
                   data-touch-id={c.id}
                   data-touch-cat=""
                   data-touch-label={c.label}
                   aria-label={`ลากเพื่อย้ายหมวด ${c.label}`}
-                  className="cursor-grab active:cursor-grabbing flex items-center px-0.5 -ml-1 py-1 rounded-lg"
+                  className="flex items-center px-0.5 -ml-1 py-1 rounded-lg"
                   style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
                 >
                   <GripVertical size={15} />
@@ -2921,9 +2955,17 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
             {items.map((item) => (
               <div
                 key={item.id}
-                draggable={false}
+                draggable
                 data-item-id={item.id}
                 data-cat={item.category}
+                onDragStart={(e) => {
+                  setDragItem({ id: item.id, cat: item.category });
+                  e.dataTransfer.effectAllowed = "move";
+                  try {
+                    e.dataTransfer.setData("text/plain", item.id);
+                    e.dataTransfer.setDragImage(makeDragImage(item.name), 12, 12);
+                  } catch (_) {}
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
@@ -2949,22 +2991,15 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                 }}
                 className="rounded-xl p-3.5 flex items-center gap-3 transition-colors"
               >
-                {/* ที่จับลาก — ลากสลับตำแหน่งในหมวด หรือลากไปวางบนหมวดอื่นเพื่อย้ายหมวด (เมาส์ + นิ้ว) */}
+                {/* ที่จับลาก — ลากทั้งการ์ดได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
                 <div
-                  draggable
-                  onDragStart={(e) => {
-                    setDragItem({ id: item.id, cat: item.category });
-                    e.dataTransfer.effectAllowed = "move";
-                    try { e.dataTransfer.setData("text/plain", item.id); } catch (_) {}
-                  }}
-                  onDragEnd={() => { setDragItem(null); setOverItem(null); }}
                   data-touch-grip
                   data-touch-kind="item"
                   data-touch-id={item.id}
                   data-touch-cat={item.category}
                   data-touch-label={item.name}
                   aria-label={`ลากเพื่อย้าย ${item.name}`}
-                  className="cursor-grab active:cursor-grabbing flex items-center px-0.5 -ml-1 py-2 rounded-lg flex-shrink-0"
+                  className="flex items-center px-0.5 -ml-1 py-2 rounded-lg flex-shrink-0"
                   style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
                 >
                   <GripVertical size={16} />
@@ -6177,6 +6212,53 @@ function StaffDashboardView({ orders }) {
 }
 
 // ================= ROOT APP =================
+// กันหน้าจอขาวทั้งแอป — ถ้ามี error ตอน render (เช่นตอนลากวาง) จะแสดงข้อความ + ปุ่มรีเฟรชแทน
+// และล็อก error จริงลง console ให้หาสาเหตุได้
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err, info) {
+    console.error("ErrorBoundary caught:", err, info);
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div
+          style={{
+            minHeight: "100vh",
+            background: COLORS.cream,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+            padding: 24,
+            fontFamily: "'Itim', sans-serif",
+            color: COLORS.ink,
+          }}
+        >
+          <p style={{ fontSize: 16, fontWeight: 600 }}>เกิดข้อผิดพลาดชั่วคราว</p>
+          <p style={{ fontSize: 12, color: COLORS.inkSoft, textAlign: "center", maxWidth: 320, lineHeight: 1.6 }}>
+            {(this.state.err && this.state.err.message) || "ไม่ทราบสาเหตุ"} — กดปุ่มด้านล่างเพื่อรีเฟรชหน้าจอ
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ background: COLORS.caramel, color: "#FFF9F0", padding: "10px 24px", borderRadius: 12, fontSize: 14, fontWeight: 600 }}
+          >
+            รีเฟรชหน้า
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [role, setRole] = useState("customer"); // customer | staff-menu | staff-orders
   // เมนูเริ่มต้นเป็น [] เมื่อเปิด sync — อย่าใช้ initialMenu (รูป stock จากลิงก์ Unsplash) ขึ้นก่อน
@@ -7245,7 +7327,12 @@ function App() {
   );
 }
 
-ReactDOM.render(<App />, document.getElementById("root"));
+ReactDOM.render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+  document.getElementById("root")
+);
 </script>
 </body>
 </html>
