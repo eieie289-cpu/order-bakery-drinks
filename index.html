@@ -667,6 +667,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
   const [addOnSheetFor, setAddOnSheetFor] = useState(null); // menu item currently picking add-ons for
+  const [detailFor, setDetailFor] = useState(null); // เมนูที่เปิดหน้ารายละเอียด (ตัวที่ไม่มีตัวเลือกเพิ่ม)
+  const [zoomImg, setZoomImg] = useState(null); // กำลังดูรูปเมนูใหญ่ (lightbox)
   // ตัวเลือกที่เลือกไว้ เก็บเป็นคีย์ "groupId::optionId" — กันกรณี id ตัวเลือกซ้ำกันคนละกลุ่ม
   // (ข้อมูลเก่าที่บันทึกด้วยบั๊ก id ซ้ำ) ทำให้กดตัวเลือกหนึ่งแล้วไปติ๊กอีกตัวเลือกในกลุ่มอื่นตาม
   const [selectedAddOnKeys, setSelectedAddOnKeys] = useState([]);
@@ -720,7 +722,13 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 
   const toggleAddOn = (groupId, optionId) => {
     const key = `${groupId}::${optionId}`;
-    setSelectedAddOnKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+    setSelectedAddOnKeys((prev) => {
+      if (prev.includes(key)) return prev.filter((k) => k !== key);
+      // กลุ่มที่ตั้ง "เลือกได้ 1 ข้อ" — เลือกอันใหม่แล้วปลดอันเก่าในกลุ่มเดียวกันอัตโนมัติ (แบบ radio)
+      const grp = normalizeAddOnGroups(addOnSheetFor.addOns).find((g) => g.id === groupId);
+      if (grp && grp.single) return [...prev.filter((k) => !k.startsWith(`${groupId}::`)), key];
+      return [...prev, key];
+    });
   };
 
   const closeAddOnSheet = () => {
@@ -919,15 +927,24 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           return (
             <div
               key={item.id}
-              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: soldOut ? 0.55 : 1 }}
+              onClick={(e) => {
+                // กันการกดปุ่มในตัวการ์ด (+, จำนวน) ไปเปิดหน้าสั่งซื้อด้วย
+                if (e.target && e.target.closest && e.target.closest("button")) return;
+                if (soldOut || !shopOpen) return;
+                // แตะการ์ด = เข้าไปหน้าสั่งซื้อ (มีตัวเลือก → ชีตเลือกตัวเลือก / ไม่มี → หน้ารายละเอียด)
+                if (hasAddOns) openAddOnSheet(item);
+                else setDetailFor(item);
+              }}
+              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: soldOut ? 0.55 : 1, cursor: "pointer" }}
               className="rounded-2xl p-4 flex gap-3 items-start"
             >
               {item.img ? (
                 <img
                   src={item.img}
                   alt={item.name}
+                  onClick={(e) => { e.stopPropagation(); setZoomImg(item.img); }}
                   className="w-20 h-20 rounded-xl object-cover flex-shrink-0"
-                  style={{ border: `1px solid ${COLORS.line}` }}
+                  style={{ border: `1px solid ${COLORS.line}`, cursor: "zoom-in" }}
                 />
               ) : (
                 <div
@@ -1020,6 +1037,59 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
         })}
       </div>
 
+      {/* หน้ารายละเอียดเมนู (ตัวที่ไม่มีตัวเลือกเพิ่ม) — แตะที่การ์ดเพื่อเปิด */}
+      {detailFor && (() => {
+        const dInCart = cart.find((c) => c.cartId === detailFor.id);
+        return (
+          <div className="fixed inset-0 z-40 flex flex-col justify-end">
+            <div onClick={() => setDetailFor(null)} className="absolute inset-0 bg-black/30" />
+            <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+              <div className="flex items-center justify-between mb-3">
+                <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">{detailFor.name}</h2>
+                <button onClick={() => setDetailFor(null)} style={{ color: COLORS.inkSoft }}>
+                  <X size={20} />
+                </button>
+              </div>
+              {detailFor.img && (
+                <img
+                  src={detailFor.img}
+                  alt={detailFor.name}
+                  onClick={() => setZoomImg(detailFor.img)}
+                  className="w-full h-52 object-cover rounded-2xl mb-3"
+                  style={{ cursor: "zoom-in" }}
+                />
+              )}
+              <p style={{ color: COLORS.inkSoft }} className="text-sm leading-relaxed mb-2">{detailFor.desc}</p>
+              <p style={{ color: COLORS.caramelDark }} className="font-bold text-lg mb-4">฿{effectiveItemPrice(detailFor, promos)}</p>
+              {dInCart ? (
+                <div className="flex items-center justify-between">
+                  <span style={{ color: COLORS.inkSoft }} className="text-sm">จำนวนในตะกร้า</span>
+                  <div style={{ background: COLORS.peachSoft }} className="flex items-center gap-3 rounded-full px-1.5 py-1">
+                    <button onClick={() => changeQty(detailFor.id, -1)} style={{ color: COLORS.caramelDark }} className="w-8 h-8 flex items-center justify-center"><Minus size={16} /></button>
+                    <span style={{ color: COLORS.ink }} className="text-sm font-semibold w-5 text-center">{dInCart.qty}</span>
+                    <button onClick={() => changeQty(detailFor.id, 1)} style={{ color: COLORS.caramelDark }} className="w-8 h-8 flex items-center justify-center"><Plus size={16} /></button>
+                  </div>
+                </div>
+              ) : (
+                <PrimaryButton full onClick={() => addToCart(detailFor)}>
+                  เพิ่มลงตะกร้า ฿{effectiveItemPrice(detailFor, promos)}
+                </PrimaryButton>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ดูรูปเมนูใหญ่ (lightbox) — แตะที่รูปเมนูเพื่อเปิด */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75" onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" className="max-w-[92vw] max-h-[85vh] rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
+          <button onClick={() => setZoomImg(null)} style={{ position: "absolute", top: 16, right: 16, color: "#FFF", background: "rgba(0,0,0,0.4)" }} className="w-10 h-10 rounded-full flex items-center justify-center">
+            <X size={22} />
+          </button>
+        </div>
+      )}
+
       {/* Add-on picker sheet — opens when a menu item has selectable extras */}
       {addOnSheetFor && (() => {
         const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
@@ -1044,32 +1114,45 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                   <X size={20} />
                 </button>
               </div>
+              {addOnSheetFor.img && (
+                <img
+                  src={addOnSheetFor.img}
+                  alt={addOnSheetFor.name}
+                  onClick={() => setZoomImg(addOnSheetFor.img)}
+                  className="w-full h-44 object-cover rounded-2xl mb-3"
+                  style={{ cursor: "zoom-in" }}
+                />
+              )}
+              {addOnSheetFor.desc && (
+                <p style={{ color: COLORS.inkSoft }} className="text-sm leading-relaxed mb-3">
+                  {addOnSheetFor.desc}
+                </p>
+              )}
               {editingCartId && (
                 <p style={{ color: COLORS.caramelDark }} className="text-xs font-semibold mb-2">
                   กำลังแก้ไขรายการในตะกร้า
                 </p>
               )}
               <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-                {groups.some((g) => g.required)
-                  ? "กลุ่มที่ติดป้าย \"บังคับเลือก\" ต้องเลือกอย่างน้อย 1 รายการ"
-                  : "เลือกตัวเลือกเพิ่มเติมได้ (ถ้าต้องการ)"}
+                อ่านคำอธิบายใต้ชื่อกลุ่มเพื่อดูว่าต้องเลือกแบบไหน
               </p>
               <div className="space-y-4 mb-5">
                 {groups.map((g) => (
                   <div key={g.id}>
-                    <div className="flex items-center gap-1.5 mb-1.5">
+                    <div className="flex items-baseline gap-1.5 flex-wrap mb-1.5">
                       <span style={{ color: COLORS.ink }} className="text-sm font-semibold">
                         {g.name || "ตัวเลือกเพิ่มเติม"}
                       </span>
-                      {g.required ? (
-                        <span style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          บังคับเลือก
-                        </span>
-                      ) : (
-                        <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          เลือกได้
-                        </span>
-                      )}
+                      {/* คำอธิบายว่าลูกค้าทำอะไรได้ — วงเล็บ เดียวกับชื่อกลุ่ม ฟอนต์เท่ากัน */}
+                      <span style={{ color: COLORS.inkSoft }} className="text-sm">
+                        ({g.required && g.single
+                          ? "ต้องเลือก 1 อันพอดี"
+                          : g.required
+                            ? "ต้องเลือกอย่างน้อย 1 อัน"
+                            : g.single
+                              ? "เลือกได้สูงสุด 1 อัน หรือไม่เลือก"
+                              : "เลือกกี่อันก็ได้ หรือไม่เลือก"})
+                      </span>
                     </div>
                     <div className="space-y-2">
                       {[...(g.options || [])].sort((a, b) => a.price - b.price).map((a) => {
@@ -1093,10 +1176,11 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                                 style={{
                                   border: `2px solid ${checked ? COLORS.caramel : COLORS.line}`,
                                   background: checked ? COLORS.caramel : "transparent",
+                                  borderRadius: g.single ? 999 : 6,
                                 }}
-                                className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                                className="w-4 h-4 flex items-center justify-center flex-shrink-0"
                               >
-                                {checked && <Check size={10} color="#fff" />}
+                                {checked && (g.single ? <span className="w-1.5 h-1.5 rounded-full bg-white" /> : <Check size={10} color="#fff" />)}
                               </div>
                             </span>
                           </button>
@@ -2618,7 +2702,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 
   // ---- กลุ่มตัวเลือกเพิ่ม (add-on groups) ----
   const addGroup = () => {
-    setForm((f) => ({ ...f, addOns: [...f.addOns, { id: nextAddOnGroupId(), name: "", required: false, options: [] }] }));
+    setForm((f) => ({ ...f, addOns: [...f.addOns, { id: nextAddOnGroupId(), name: "", required: false, single: false, options: [] }] }));
   };
 
   const updateGroup = (gid, patch) => {
@@ -3369,6 +3453,19 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                           title={g.required ? "ลูกค้าต้องเลือกอย่างน้อย 1 รายการในกลุ่มนี้" : "ลูกค้าสามารถไม่เลือกก็ได้"}
                         >
                           {g.required ? "บังคับเลือก" : "ไม่บังคับ"}
+                        </button>
+                        {/* เลือกได้สูงสุด 1 ข้อ (แบบเดียว) หรือเลือกได้หลายข้อ */}
+                        <button
+                          type="button"
+                          onClick={() => updateGroup(g.id, { single: !g.single })}
+                          style={{
+                            background: g.single ? COLORS.caramel : COLORS.sageSoft,
+                            color: g.single ? "#FFF9F0" : COLORS.sage,
+                          }}
+                          className="text-[11px] font-bold px-2.5 py-1.5 rounded-full flex-shrink-0 active:scale-95 transition-transform"
+                          title={g.single ? "ลูกค้าเลือกได้สูงสุด 1 รายการในกลุ่มนี้ (เช่น ระดับความหวาน)" : "ลูกค้าเลือกกี่รายการก็ได้ในกลุ่มนี้ (เช่น ท็อปปิ้ง)"}
+                        >
+                          {g.single ? "เลือกได้ 1 ข้อ" : "เลือกได้หลายข้อ"}
                         </button>
                         <button onClick={() => removeGroup(g.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
                           <Trash2 size={14} />
