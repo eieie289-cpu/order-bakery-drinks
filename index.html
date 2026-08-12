@@ -2865,13 +2865,13 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
               onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget)) return; setOverCat((o) => (o === c.id ? null : o)); }}
               onDrop={(e) => { e.preventDefault(); dropCategory(c.id); setDragCat(null); setOverCat(null); }}
               onDragEnd={() => { setDragCat(null); setOverCat(null); }}
-              className="cursor-grab active:cursor-grabbing flex items-center justify-between rounded-xl px-3 py-2.5 transition-colors"
+              className="cursor-grab active:cursor-grabbing flex flex-wrap items-center rounded-xl px-3 py-2.5 transition-colors"
               style={{
                 background: overCat === c.id ? COLORS.peachSoft : COLORS.cream,
                 border: overCat === c.id ? `1.5px solid ${COLORS.caramel}` : `1px solid ${COLORS.line}`,
               }}
             >
-              <div className="flex items-center gap-1.5 min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0 mr-auto">
                 {/* ที่จับลาก — ลากทั้งแถวได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
                 <div
                   data-touch-grip
@@ -2970,12 +2970,16 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
                   const id = e.currentTarget.dataset.itemId;
+                  const cat = e.currentTarget.dataset.cat;
                   if (overItem && overItem.id === id) return;
-                  setOverItem({ id, cat: e.currentTarget.dataset.cat });
+                  setOverItem({ id, cat });
                 }}
                 onDragLeave={(e) => {
                   if (e.currentTarget.contains(e.relatedTarget)) return;
-                  setOverItem((o) => (o && o.id === e.currentTarget.dataset.itemId ? null : o));
+                  // เก็บค่า id ก่อนเรียก setState — ห้ามแตะ e.currentTarget ในฟังก์ชันอัปเดต
+                  // (React ปล่อย currentTarget เป็น null หลัง event จบ แล้วค่อยเรียกอัปเดต → crash)
+                  const leaveId = e.currentTarget.dataset.itemId;
+                  setOverItem((o) => (o && o.id === leaveId ? null : o));
                 }}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -2989,75 +2993,84 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                   border: overItem && overItem.id === item.id ? `1.5px solid ${COLORS.caramel}` : `1px solid ${COLORS.line}`,
                   opacity: item.active ? 1 : 0.5,
                 }}
-                className="rounded-xl p-3.5 flex items-center gap-3 transition-colors"
+                className="rounded-xl p-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2 transition-colors"
               >
-                {/* ที่จับลาก — ลากทั้งการ์ดได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
-                <div
-                  data-touch-grip
-                  data-touch-kind="item"
-                  data-touch-id={item.id}
-                  data-touch-cat={item.category}
-                  data-touch-label={item.name}
-                  aria-label={`ลากเพื่อย้าย ${item.name}`}
-                  className="flex items-center px-0.5 -ml-1 py-2 rounded-lg flex-shrink-0"
-                  style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
-                >
-                  <GripVertical size={16} />
-                </div>
-                {/* ลูกศรสลับตำแหน่งขึ้น/ลง (ภายในหมวดเดียวกัน) — สำรองสำหรับหน้าจอสัมผัส */}
-                <div className="flex flex-col gap-1 flex-shrink-0">
-                  <button
-                    onClick={() => moveItem(item.id, -1)}
-                    aria-label={`เลื่อน ${item.name} ขึ้น`}
-                    style={{ color: COLORS.inkSoft }}
-                    className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
+                {/* กลุ่มซ้าย: ที่จับลาก + ลูกศร — จอแคบจะอยู่แถวบนเสมอ */}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {/* ที่จับลาก — ลากทั้งการ์ดได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
+                  <div
+                    data-touch-grip
+                    data-touch-kind="item"
+                    data-touch-id={item.id}
+                    data-touch-cat={item.category}
+                    data-touch-label={item.name}
+                    aria-label={`ลากเพื่อย้าย ${item.name}`}
+                    className="flex items-center px-0.5 -ml-1 py-2 rounded-lg"
+                    style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
                   >
-                    <ChevronUp size={14} />
-                  </button>
-                  <button
-                    onClick={() => moveItem(item.id, 1)}
-                    aria-label={`เลื่อน ${item.name} ลง`}
-                    style={{ color: COLORS.inkSoft }}
-                    className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
-                  >
-                    <ChevronDown size={14} />
-                  </button>
-                </div>
-                {item.img ? (
-                  <img src={item.img} alt={item.name} className="w-11 h-11 rounded-lg object-cover flex-shrink-0" style={{ border: `1px solid ${COLORS.line}` }} />
-                ) : (
-                  <div style={{ background: COLORS.peachSoft }} className="w-11 h-11 rounded-lg flex-shrink-0 flex items-center justify-center text-xs" >
-                    <span style={{ color: COLORS.caramelDark }}>ไม่มีรูป</span>
+                    <GripVertical size={16} />
                   </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{item.name}</p>
-                  <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">{item.desc}</p>
-                  <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold mt-0.5">
-                    ฿{item.price}
-                    {item.addOns && item.addOns.length > 0 && (
-                      <span style={{ color: COLORS.inkSoft }} className="font-normal">
-                        {" "}· ตัวเลือกเพิ่ม {normalizeAddOnGroups(item.addOns).length} กลุ่ม
-                      </span>
-                    )}
-                  </p>
-                  {(item.cost != null || (item.recipe && Object.keys(item.recipe).length > 0)) && (
-                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
-                      {item.cost != null ? `ต้นทุน ฿${item.cost}/หน่วย` : ""}
-                      {item.cost != null && Object.keys(item.recipe || {}).length > 0 ? " · " : ""}
-                      {Object.keys(item.recipe || {}).length > 0 ? `ใช้วัตถุดิบ ${Object.keys(item.recipe).length} รายการ` : ""}
-                    </p>
-                  )}
+                  {/* ลูกศรสลับตำแหน่งขึ้น/ลง (ภายในหมวดเดียวกัน) — สำรองสำหรับหน้าจอสัมผัส */}
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={() => moveItem(item.id, -1)}
+                      aria-label={`เลื่อน ${item.name} ขึ้น`}
+                      style={{ color: COLORS.inkSoft }}
+                      className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <button
+                      onClick={() => moveItem(item.id, 1)}
+                      aria-label={`เลื่อน ${item.name} ลง`}
+                      style={{ color: COLORS.inkSoft }}
+                      className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                  </div>
                 </div>
-                <button onClick={() => toggleActive(item.id)} className="flex-shrink-0">
-                  <Chip tone={item.active ? "sage" : "caramel"}>{item.active ? "กำลังขาย" : "ซ่อนอยู่"}</Chip>
-                </button>
-                <button onClick={() => startEdit(item)} style={{ color: COLORS.inkSoft }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                  <Pencil size={15} />
-                </button>
-                <button onClick={() => remove(item.id)} style={{ color: "#C0533F" }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                  <Trash2 size={15} />
-                </button>
+                {/* กลุ่มกลาง: รูป + รายละเอียด — กินพื้นที่เหลือ จอแคบจะได้ความกว้างเต็มแถว */}
+                <div className="flex items-center gap-3 min-w-0" style={{ flex: "1 1 150px" }}>
+                  {item.img ? (
+                    <img src={item.img} alt={item.name} className="w-11 h-11 rounded-lg object-cover flex-shrink-0" style={{ border: `1px solid ${COLORS.line}` }} />
+                  ) : (
+                    <div style={{ background: COLORS.peachSoft }} className="w-11 h-11 rounded-lg flex-shrink-0 flex items-center justify-center text-xs" >
+                      <span style={{ color: COLORS.caramelDark }}>ไม่มีรูป</span>
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{item.name}</p>
+                    <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">{item.desc}</p>
+                    <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold mt-0.5">
+                      ฿{item.price}
+                      {item.addOns && item.addOns.length > 0 && (
+                        <span style={{ color: COLORS.inkSoft }} className="font-normal">
+                          {" "}· ตัวเลือกเพิ่ม {normalizeAddOnGroups(item.addOns).length} กลุ่ม
+                        </span>
+                      )}
+                    </p>
+                    {(item.cost != null || (item.recipe && Object.keys(item.recipe).length > 0)) && (
+                      <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
+                        {item.cost != null ? `ต้นทุน ฿${item.cost}/หน่วย` : ""}
+                        {item.cost != null && Object.keys(item.recipe || {}).length > 0 ? " · " : ""}
+                        {Object.keys(item.recipe || {}).length > 0 ? `ใช้วัตถุดิบ ${Object.keys(item.recipe).length} รายการ` : ""}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {/* กลุ่มขวา: สถานะ + ปุ่มแก้/ลบ — จอแคบจะ wrap ลงแถวล่าง (ขวา) */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <button onClick={() => toggleActive(item.id)} className="flex-shrink-0">
+                    <Chip tone={item.active ? "sage" : "caramel"}>{item.active ? "กำลังขาย" : "ซ่อนอยู่"}</Chip>
+                  </button>
+                  <button onClick={() => startEdit(item)} style={{ color: COLORS.inkSoft }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+                    <Pencil size={15} />
+                  </button>
+                  <button onClick={() => remove(item.id)} style={{ color: "#C0533F" }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
