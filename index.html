@@ -105,6 +105,7 @@ function Box(props) { return (<IconBase {...props}><path d="M21 8.5v7.5l-9 4.5-9
 function Wallet(props) { return (<IconBase {...props}><rect x="2.5" y="6" width="19" height="13" rx="2" /><path d="M16.5 12.5h.01" /><path d="M2.5 9.5h19" /><path d="M16.5 10.5v4" /></IconBase>); }
 function TrendingUp(props) { return (<IconBase {...props}><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></IconBase>); }
 function Receipt(props) { return (<IconBase {...props}><path d="M5 3h14v18l-2.5-1.5L14 21l-2-1.5L10 21l-2.5-1.5L5 21V3z" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="9" y1="12" x2="13" y2="12" /></IconBase>); }
+function Utensils(props) { return (<IconBase {...props}><path d="M7 3v8M4 3v4a3 3 0 0 0 3 3v11" /><path d="M17 3c-1.5 1.2-2.4 3-2.4 5.2 0 1.6.9 2.9 2.4 3.3V21" /></IconBase>); }
 
 // TODO: เปลี่ยนเป็นรหัสของร้านเอง — กันลูกค้ากดหลุดเข้าหน้าพนักงานเฉย ๆ
 // (นี่ไม่ใช่ระบบความปลอดภัยจริง แค่กันคนทั่วไปเข้าผิดหน้าโดยไม่ตั้งใจ)
@@ -181,7 +182,18 @@ const initialMenu = [
   },
 ];
 
+// หมวดเมนูเริ่มต้น — พนักงานเพิ่ม/ลบ/แก้ชื่อได้ที่หน้าจัดการเมนู (บันทึกใน config/categories)
+const DEFAULT_CATEGORIES = [
+  { id: "drink", label: "เครื่องดื่ม" },
+  { id: "bakery", label: "เบเกอรี่" },
+];
+// ใช้เป็นชื่อสำรองเมื่อหาหมวดไม่เจอ (ข้อมูลเก่าที่ยังมี category id เดิม เช่น "drink"/"bakery")
 const CATEGORY_LABEL = { drink: "เครื่องดื่ม", bakery: "เบเกอรี่" };
+// ชื่อหมวดจากลิสต์หมวดปัจจุบัน — หมวดใหม่ที่พนักงานสร้างจะได้ชื่อตรง ๆ
+const categoryLabel = (id, categories) => {
+  const c = (categories || []).find((x) => x.id === id);
+  return (c && c.label) || CATEGORY_LABEL[id] || id;
+};
 
 let idCounter = 100;
 const nextId = () => `m${idCounter++}`;
@@ -368,6 +380,27 @@ const DELIVERY_TIME_SLOTS = (() => {
   }
   return slots;
 })();
+
+// สร้างช่วงเวลาจัดส่ง (ทุก 30 นาที) จากเวลาเปิด-ปิดจัดส่งที่ร้านตั้งไว้ในหน้าจัดการเมนู
+// เช่น "09:00"–"20:00" → [09:00, 09:30, ..., 20:00] — ถ้าไม่ได้ตั้ง ใช้ค่าเริ่มต้น 09:00–20:00
+const buildTimeSlots = (start, end) => {
+  const toMin = (t) => {
+    const [h, m] = String(t || "").split(":").map(Number);
+    return Number.isFinite(h) ? h * 60 + (Number.isFinite(m) ? m : 0) : 0;
+  };
+  const s = toMin(start);
+  const e = Math.max(toMin(end), s + 30);
+  const slots = [];
+  for (let t = s; t <= e; t += 30) {
+    slots.push(`${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`);
+  }
+  return slots;
+};
+// จำกัดเวลาให้อยู่ในรูปแบบ HH:MM เสมอ (ใช้กับ input time ที่อาจได้ค่าเปล่า)
+const clampTimeInput = (v, fallback) => {
+  const s = String(v || "").trim();
+  return /^\d{2}:\d{2}$/.test(s) ? s : fallback;
+};
 
 const pad2 = (n) => String(n).padStart(2, "0");
 // คืนค่า YYYY-MM-DD ของวันนั้น (ใช้เป็นค่า min ของ input date และค่าตั้งต้น "วันนี้"/"พรุ่งนี้")
@@ -625,7 +658,7 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
 }
 
 // ================= CUSTOMER VIEW =================
-function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos, shopName, shopSlogan }) {
+function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, promos, shopName, shopSlogan, categories, shopHours }) {
   const [openCat, setOpenCat] = useState("all");
   const [showCart, setShowCart] = useState(false);
   const [noteOpenFor, setNoteOpenFor] = useState(null);
@@ -635,7 +668,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
   const [selectedAddOnKeys, setSelectedAddOnKeys] = useState([]);
   const [editingCartId, setEditingCartId] = useState(null); // กำลังแก้ไขรายการในตะกร้าอันไหน (null = เพิ่มใหม่)
 
-  const categories = ["all", ...Object.keys(CATEGORY_LABEL)];
+  const tabs = ["all", ...(categories || DEFAULT_CATEGORIES).map((c) => c.id)];
   const visibleMenu = menu.filter(
     (m) => m.active && (openCat === "all" || m.category === openCat)
   );
@@ -804,6 +837,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             {shopOpen ? "ร้านเปิดอยู่" : "ร้านปิดอยู่ขณะนี้"}
           </span>
         </div>
+        <p style={{ color: "#F2DDBE" }} className="text-[11px] mt-2">
+          เปิดบริการ {shopHours && shopHours.openTime ? `${shopHours.openTime} – ${shopHours.closeTime || "20:00"} น.` : "09:00 – 20:00 น."}
+        </p>
       </div>
 
       {!shopOpen && (
@@ -819,7 +855,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 
       {/* Category tabs — ล็อกไว้ตอนร้านปิด กดเปลี่ยนหมวดไม่ได้ */}
       <div className="flex gap-2 px-5 mt-5 overflow-x-auto pb-1">
-        {categories.map((cat) => (
+        {tabs.map((cat) => (
           <button
             key={cat}
             onClick={() => shopOpen && setOpenCat(cat)}
@@ -832,7 +868,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             }}
             className="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors disabled:cursor-not-allowed"
           >
-            {cat === "all" ? "ทั้งหมด" : CATEGORY_LABEL[cat]}
+            {cat === "all" ? "ทั้งหมด" : categoryLabel(cat, categories)}
           </button>
         ))}
       </div>
@@ -861,7 +897,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           </div>
         )}
         {menuLoaded && visibleMenu.map((item) => {
-          const Icon = CATEGORY_ICONS[item.category];
+          const Icon = CATEGORY_ICONS[item.category] || Utensils;
           const hasAddOns = item.addOns && item.addOns.length > 0;
           // ราคาหลังโปรโมชั่นลดราคาเมนู (ถ้ามี) — แสดงราคาเดิมขีดฆ่า + ป้าย %
           const discountedPrice = effectiveItemPrice(item, promos);
@@ -1223,7 +1259,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 }
 
 // ================= CHECKOUT VIEW =================
-function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr }) {
+function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliveryHours }) {
   const [method, setMethod] = useState("promptpay");
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
@@ -1237,6 +1273,25 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr }) {
   const [custError, setCustError] = useState(false);
   const custFormRef = useRef(null);
   const dateOptions = useMemo(() => upcomingDateOptions(7), []);
+  // เวลาปัจจุบัน (อัปเดตทุก 30 วินาที) — วันนี้จะปัดช่วงเวลาที่ผ่านไปแล้วออกจากตัวเลือก
+  const [nowStr, setNowStr] = useState(() => {
+    const d = new Date();
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  });
+  useEffect(() => {
+    const t = setInterval(() => {
+      const d = new Date();
+      setNowStr(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`);
+    }, 30000);
+    return () => clearInterval(t);
+  }, []);
+  // ช่วงเวลาจัดส่งที่ร้านตั้งไว้ (จากหน้าจัดการเมนู) — ถ้ายังไม่ได้ตั้ง ใช้ค่าเริ่มต้น 09:00–20:00
+  const deliverySlots = useMemo(
+    () => buildTimeSlots((deliveryHours && deliveryHours.deliveryOpenTime) || "09:00", (deliveryHours && deliveryHours.deliveryCloseTime) || "20:00"),
+    [deliveryHours && deliveryHours.deliveryOpenTime, deliveryHours && deliveryHours.deliveryCloseTime]
+  );
+  const isTodayDelivery = custDeliveryDate === todayKey();
+  const remainingSlotsToday = isTodayDelivery ? deliverySlots.filter((t) => t > nowStr) : deliverySlots;
   // โค้ดส่วนลด — ลด % หรือบาทจากยอดรวมสินค้า (เฉพาะโค้ดที่พนักงานสร้างไว้ในหน้าโปรโมชั่น)
   const [promoCode, setPromoCode] = useState("");
   const [appliedPromo, setAppliedPromo] = useState(null);
@@ -1545,7 +1600,12 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr }) {
                   <button
                     key={opt.key}
                     type="button"
-                    onClick={() => { setCustDeliveryDate(opt.key); setCustError(false); }}
+                    onClick={() => {
+                      setCustDeliveryDate(opt.key);
+                      setCustError(false);
+                      // เปลี่ยนมาเลือก "วันนี้" แล้วเวลาที่เคยเลือกไว้อาจผ่านไปแล้ว — เคลียร์ให้เลือกใหม่
+                      if (opt.key === todayKey() && custDeliveryTime && custDeliveryTime <= nowStr) setCustDeliveryTime("");
+                    }}
                     style={{
                       background: custDeliveryDate === opt.key ? COLORS.caramel : COLORS.paper,
                       color: custDeliveryDate === opt.key ? "#FFF9F0" : COLORS.inkSoft,
@@ -1567,15 +1627,37 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr }) {
                 className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none bg-white"
               >
                 <option value="">เลือกเวลา...</option>
-                {DELIVERY_TIME_SLOTS.map((t) => (
-                  <option key={t} value={t}>{t} น.</option>
-                ))}
+                {/* วันนี้ — ปัดช่วงเวลาที่ผ่านไปแล้วออก (เลือกไม่ได้) เหลือแต่เวลาที่ยังจัดส่งได้ */}
+                {deliverySlots.map((t) => {
+                  const past = isTodayDelivery && t <= nowStr;
+                  return (
+                    <option key={t} value={t} disabled={past}>
+                      {t} น.{past ? " (ผ่านไปแล้ว)" : ""}
+                    </option>
+                  );
+                })}
               </select>
+              {isTodayDelivery ? (
+                remainingSlotsToday.length > 0 ? (
+                  <p style={{ color: COLORS.sage }} className="text-[11px] mt-1.5 flex items-center gap-1">
+                    <Clock size={11} className="flex-shrink-0" />
+                    ตอนนี้เวลา {nowStr} น. — วันนี้เหลือเวลาจัดส่ง {remainingSlotsToday.length} ช่วงเวลา
+                  </p>
+                ) : (
+                  <p style={{ color: "#C0533F" }} className="text-[11px] mt-1.5">
+                    วันนี้หมดเวลาจัดส่งแล้ว ({nowStr} น.) — กรุณาเลือกวันพรุ่งนี้หรือวันถัดไป
+                  </p>
+                )
+              ) : (
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
+                  ร้านจัดส่งช่วง {deliverySlots[0] || "09:00"} – {deliverySlots[deliverySlots.length - 1] || "20:00"} น. (ทุก 30 นาที)
+                </p>
+              )}
             </div>
           </>
         ) : (
           <p style={{ color: COLORS.inkSoft, background: COLORS.paper }} className="text-xs rounded-xl px-3.5 py-2.5" >
-            มารับที่ร้านได้เลย ร้านเปิดตามเวลาปกติ — ไม่ต้องเลือกวันเวลาจัดส่ง
+            มารับที่ร้านได้เลย ร้านเปิด {(deliveryHours && deliveryHours.openTime) || "09:00"} – {(deliveryHours && deliveryHours.closeTime) || "20:00"} น. — ไม่ต้องเลือกวันเวลาจัดส่ง
           </p>
         )}
         {custError && (
@@ -1986,27 +2068,38 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
 }
 
 // ================= MENU MANAGER (staff) =================
-function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, stockItems }) {
+function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
   const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
   const [newOptionName, setNewOptionName] = useState({}); // groupId -> ชื่อตัวเลือกที่กำลังพิมพ์
   const [newOptionPrice, setNewOptionPrice] = useState({}); // groupId -> ราคาที่กำลังพิมพ์
   const [newOptionCost, setNewOptionCost] = useState({}); // groupId -> ต้นทุนตัวเลือกที่กำลังพิมพ์
 
-  // ---- ตั้งค่าร้าน: ชื่อร้าน + คำขวัญ + โค้ด QR (พร้อมเพย์) ----
+  // ---- ตั้งค่าร้าน: ชื่อร้าน + คำขวัญ + โค้ด QR (พร้อมเพย์) + เวลาเปิด-ปิดร้าน/จัดส่ง ----
   const [shopNameInput, setShopNameInput] = useState("");
   const [shopSloganInput, setShopSloganInput] = useState("");
   const [shopQrInput, setShopQrInput] = useState("");
+  const [openTimeInput, setOpenTimeInput] = useState("09:00");
+  const [closeTimeInput, setCloseTimeInput] = useState("20:00");
+  const [deliveryOpenInput, setDeliveryOpenInput] = useState("09:00");
+  const [deliveryCloseInput, setDeliveryCloseInput] = useState("20:00");
   const [shopSavedFlash, setShopSavedFlash] = useState(false); // แสดง "บันทึกแล้ว" ชั่วคราว
   const [qrCompressInfo, setQrCompressInfo] = useState(null); // { before, after } — ขนาดไฟล์ก่อน/หลังบีบอัด
   const [qrVerify, setQrVerify] = useState(null); // { ok, data } — ผลตรวจว่า QR ยังอ่านได้ไหม (null = ยังไม่ตรวจ)
   const qrInputRef = useRef(null);
+  // ---- จัดการหมวดเมนู: เพิ่ม/ลบหมวด + สถานะยืนยันการลบ (กด 2 ครั้ง) ----
+  const [newCatName, setNewCatName] = useState("");
+  const [confirmDelCat, setConfirmDelCat] = useState(null);
 
   // ซิงก์ค่าจากข้อมูลร้าน (ตอนโหลดหน้า / เมื่อพนักงานเครื่องอื่นแก้แล้วทุกเครื่องเห็น)
   useEffect(() => {
     setShopNameInput((shopInfo && shopInfo.name) || "");
     setShopSloganInput((shopInfo && shopInfo.slogan) || "");
     setShopQrInput((shopInfo && shopInfo.qr) || "");
+    setOpenTimeInput((shopInfo && shopInfo.openTime) || "09:00");
+    setCloseTimeInput((shopInfo && shopInfo.closeTime) || "20:00");
+    setDeliveryOpenInput((shopInfo && shopInfo.deliveryOpenTime) || "09:00");
+    setDeliveryCloseInput((shopInfo && shopInfo.deliveryCloseTime) || "20:00");
   }, [shopInfo]);
 
   const handleQrUpload = async (e) => {
@@ -2056,9 +2149,42 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   };
 
   const saveShopSettings = () => {
-    onSaveShopInfo({ name: shopNameInput, slogan: shopSloganInput, qr: shopQrInput });
+    onSaveShopInfo({
+      name: shopNameInput,
+      slogan: shopSloganInput,
+      qr: shopQrInput,
+      openTime: clampTimeInput(openTimeInput, "09:00"),
+      closeTime: clampTimeInput(closeTimeInput, "20:00"),
+      deliveryOpenTime: clampTimeInput(deliveryOpenInput, "09:00"),
+      deliveryCloseTime: clampTimeInput(deliveryCloseInput, "20:00"),
+    });
     setShopSavedFlash(true);
     setTimeout(() => setShopSavedFlash(false), 2000);
+  };
+
+  // เพิ่มหมวดเมนูใหม่ — ลูกค้าจะเห็นเป็นแท็บหมวดบนหน้าสั่งทันที
+  const addCategory = () => {
+    const label = newCatName.trim();
+    if (!label) return;
+    const id = `cat${Date.now().toString(36)}`;
+    updateCategories([...(categories || DEFAULT_CATEGORIES), { id, label }]);
+    setNewCatName("");
+  };
+
+  // ลบหมวด — กด 2 ครั้งเพื่อยืนยัน (กันลบพลาด) เมนูที่อยู่ในหมวดจะย้ายไปหมวดแรกที่เหลือ
+  const deleteCategory = (id) => {
+    const remaining = (categories || DEFAULT_CATEGORIES).filter((c) => c.id !== id);
+    if (remaining.length === 0) return;
+    if (confirmDelCat !== id) {
+      setConfirmDelCat(id);
+      setTimeout(() => setConfirmDelCat((v) => (v === id ? null : v)), 3500);
+      return;
+    }
+    const firstId = remaining[0].id;
+    updateCategories(remaining);
+    setMenu((prev) => prev.map((m) => (m.category === id ? { ...m, category: firstId } : m)));
+    if (form.category === id) setForm((f) => ({ ...f, category: firstId }));
+    setConfirmDelCat(null);
   };
 
   const startEdit = (item) => {
@@ -2087,7 +2213,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   const startNew = () => {
     seedAddOnCounters(menu);
     setEditing("new");
-    setForm({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
+    const firstCat = (categories && categories[0] && categories[0].id) || "drink";
+    setForm({ name: "", desc: "", price: "", category: firstCat, img: "", addOns: [], cost: "", recipe: {} });
     setNewOptionName({});
     setNewOptionPrice({});
   };
@@ -2241,9 +2368,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
               <Check size={13} /> บันทึกแล้ว
             </span>
           )}
-        </div>
-        <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
-          ชื่อร้านที่ลูกค้าเห็น กับโค้ดพร้อมเพย์สำหรับรับเงิน
+        </div>          <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
+          ชื่อร้านที่ลูกค้าเห็น โค้ดพร้อมเพย์สำหรับรับเงิน และเวลาที่ให้บริการ
         </p>
 
         <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อร้าน</label>
@@ -2264,6 +2390,52 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           style={{ background: COLORS.cream, border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
         />
         <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">ข้อความสั้น ๆ ที่โชว์ใต้ชื่อร้านบนหน้าลูกค้า</p>
+
+        <div className="grid grid-cols-2 gap-2 mt-3">
+          <div>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">เวลาเปิดร้าน</label>
+            <input
+              type="time"
+              value={openTimeInput}
+              onChange={(e) => setOpenTimeInput(e.target.value)}
+              className="w-full rounded-xl px-3 py-2 text-sm outline-none bg-white"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            />
+          </div>
+          <div>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">เวลาปิดร้าน</label>
+            <input
+              type="time"
+              value={closeTimeInput}
+              onChange={(e) => setCloseTimeInput(e.target.value)}
+              className="w-full rounded-xl px-3 py-2 text-sm outline-none bg-white"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            />
+          </div>
+          <div>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จัดส่งเริ่มเวลา</label>
+            <input
+              type="time"
+              value={deliveryOpenInput}
+              onChange={(e) => setDeliveryOpenInput(e.target.value)}
+              className="w-full rounded-xl px-3 py-2 text-sm outline-none bg-white"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            />
+          </div>
+          <div>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จัดส่งถึงเวลา</label>
+            <input
+              type="time"
+              value={deliveryCloseInput}
+              onChange={(e) => setDeliveryCloseInput(e.target.value)}
+              className="w-full rounded-xl px-3 py-2 text-sm outline-none bg-white"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+            />
+          </div>
+        </div>
+        <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5 leading-relaxed">
+          ช่วงเวลาจัดส่งที่ลูกค้าเลือกได้ (ทุก 30 นาที) — วันนี้จะเหลือเฉพาะเวลาที่ยังไม่ผ่านไปเท่านั้น ถ้าร้านเปิด 10 โมงก็ตั้งจัดส่งเริ่ม 10:00 ได้
+        </p>
 
         <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">โค้ด QR (พร้อมเพย์)</label>
         <div className="flex items-center gap-3">
@@ -2352,6 +2524,58 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
         </button>
       </div>
 
+      {/* จัดการหมวดเมนู — เพิ่ม/ลบหมวดอาหาร ลูกค้าเห็นเป็นแท็บหมวดบนหน้าสั่ง */}
+      <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-6">
+        <div className="flex items-center justify-between mb-1">
+          <p style={{ color: COLORS.ink }} className="text-sm font-semibold flex items-center gap-1.5">
+            <Box size={15} style={{ color: COLORS.caramelDark }} /> จัดการหมวดเมนู
+          </p>
+        </div>
+        <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
+          เพิ่ม/ลบหมวดอาหาร — ลูกค้าจะเห็นแท็บหมวดเหล่านี้บนหน้าสั่งของ
+        </p>
+        <div className="space-y-2 mb-3">
+          {(categories || DEFAULT_CATEGORIES).map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center justify-between rounded-xl px-3 py-2.5"
+              style={{ background: COLORS.cream, border: `1px solid ${COLORS.line}` }}
+            >
+              <span style={{ color: COLORS.ink }} className="text-sm font-medium">{c.label}</span>
+              <div className="flex items-center gap-2">
+                <span style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                  {menu.filter((m) => m.category === c.id).length} เมนู
+                </span>
+                <button
+                  onClick={() => deleteCategory(c.id)}
+                  style={confirmDelCat === c.id ? { background: "#C0533F", color: "#FFF" } : { color: "#C0533F" }}
+                  className="text-[11px] font-semibold rounded-lg px-2.5 py-1.5 transition-colors"
+                >
+                  {confirmDelCat === c.id ? "กดอีกครั้งเพื่อยืนยัน" : "ลบ"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={newCatName}
+            onChange={(e) => setNewCatName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCategory(); } }}
+            placeholder="ชื่อหมวดใหม่ เช่น อาหารจานเดียว"
+            style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink, background: COLORS.cream }}
+            className="flex-1 rounded-xl px-3.5 py-2.5 text-sm outline-none min-w-0"
+          />
+          <button
+            onClick={addCategory}
+            style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+            className="rounded-xl px-4 py-2.5 text-sm font-semibold flex items-center gap-1 flex-shrink-0"
+          >
+            <Plus size={15} /> เพิ่ม
+          </button>
+        </div>
+      </div>
+
       {!menuLoaded && (
         <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
           กำลังโหลดเมนู...
@@ -2360,7 +2584,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
       {menuLoaded && Object.entries(grouped).map(([cat, items]) => (
         <div key={cat} className="mb-5">
           <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
-            {CATEGORY_LABEL[cat] || cat}
+            {categoryLabel(cat, categories)}
           </p>
           <div className="space-y-2">
             {items.map((item) => (
@@ -2457,19 +2681,19 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                   <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-1.5">{photoError}</p>
                 )}
               </div>
-              <div className="flex gap-2">
-                {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
+              <div className="flex gap-2 flex-wrap">
+                {(categories || DEFAULT_CATEGORIES).map((c) => (
                   <button
-                    key={key}
-                    onClick={() => setForm((f) => ({ ...f, category: key }))}
+                    key={c.id}
+                    onClick={() => setForm((f) => ({ ...f, category: c.id }))}
                     style={{
-                      background: form.category === key ? COLORS.caramel : "#FFFFFF",
-                      color: form.category === key ? "#FFF9F0" : COLORS.inkSoft,
-                      border: `1px solid ${form.category === key ? COLORS.caramel : COLORS.line}`,
+                      background: form.category === c.id ? COLORS.caramel : "#FFFFFF",
+                      color: form.category === c.id ? "#FFF9F0" : COLORS.inkSoft,
+                      border: `1px solid ${form.category === c.id ? COLORS.caramel : COLORS.line}`,
                     }}
                     className="px-4 py-2 rounded-full text-xs font-medium"
                   >
-                    {label}
+                    {c.label}
                   </button>
                 ))}
               </div>
@@ -5586,7 +5810,13 @@ function App() {
     name: "น้ำหวาน & เบเกอรี่",
     slogan: "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
     qr: PROMPTPAY_QR_URL,
+    openTime: "09:00",
+    closeTime: "20:00",
+    deliveryOpenTime: "09:00",
+    deliveryCloseTime: "20:00",
   });
+  // หมวดเมนู — พนักงานเพิ่ม/ลบ/จัดเมนูเข้ากลุ่มได้ที่หน้าจัดการเมนู (ซิงก์ผ่าน Firestore config/categories)
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
 
   // Staff access: only reachable via a link with ?staff=1, and only after a PIN.
   // Regular customers opening the shop link never see this — the switcher below
@@ -5934,6 +6164,10 @@ function App() {
               name: (d.name && String(d.name).trim()) || "น้ำหวาน & เบเกอรี่",
               slogan: (d.slogan && String(d.slogan).trim()) || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
               qr: d.qr || PROMPTPAY_QR_URL,
+              openTime: (d.openTime && String(d.openTime)) || "09:00",
+              closeTime: (d.closeTime && String(d.closeTime)) || "20:00",
+              deliveryOpenTime: (d.deliveryOpenTime && String(d.deliveryOpenTime)) || "09:00",
+              deliveryCloseTime: (d.deliveryCloseTime && String(d.deliveryCloseTime)) || "20:00",
             });
           }
         },
@@ -5949,12 +6183,16 @@ function App() {
     document.title = `${shopInfo.name} — สั่งอาหาร`;
   }, [shopInfo.name]);
 
-  // บันทึกชื่อร้าน + รูป QR — เรียกจากหน้าจัดการเมนู (พนักงาน) / ใช้ค่าเดิมถ้าเว้นว่าง
+  // บันทึกชื่อร้าน + รูป QR + เวลาเปิด-ปิดร้าน/จัดส่ง — เรียกจากหน้าจัดการเมนู (พนักงาน) / ใช้ค่าเดิมถ้าเว้นว่าง
   const saveShopInfo = (info) => {
     const next = {
       name: (info.name || "").trim() || "น้ำหวาน & เบเกอรี่",
       slogan: (info.slogan || "").trim() || "อบใหม่ทุกวัน · ปั่นสดทุกแก้ว",
       qr: info.qr || PROMPTPAY_QR_URL,
+      openTime: clampTimeInput(info.openTime, "09:00"),
+      closeTime: clampTimeInput(info.closeTime, "20:00"),
+      deliveryOpenTime: clampTimeInput(info.deliveryOpenTime, "09:00"),
+      deliveryCloseTime: clampTimeInput(info.deliveryCloseTime, "20:00"),
     };
     setShopInfo(next);
     if (FIREBASE_SYNC_ENABLED) {
@@ -5963,6 +6201,44 @@ function App() {
         .set(next)
         .catch((err) => console.error("บันทึกข้อมูลร้านขึ้น Firestore ไม่สำเร็จ:", err));
     }
+  };
+
+  // ฟังหมวดเมนูจาก Firestore — พนักงานแก้หมวดที่เครื่องไหน ทุกเครื่อง (ลูกค้า+พนักงาน) เห็นทันที
+  useEffect(() => {
+    if (!FIREBASE_SYNC_ENABLED) return;
+    const unsubscribe = db
+      .collection("config")
+      .doc("categories")
+      .onSnapshot(
+        (doc) => {
+          if (doc.exists && Array.isArray(doc.data().items) && doc.data().items.length > 0) {
+            setCategories(doc.data().items);
+          } else {
+            // เอกสารยังไม่เคยถูกสร้าง — ตั้งหมวดเริ่มต้นให้
+            db.collection("config").doc("categories").set({ items: DEFAULT_CATEGORIES }).catch((err) => {
+              console.error("ตั้งค่าหมวดเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
+            });
+          }
+        },
+        (err) => {
+          console.error("Firestore categories subscription failed:", err);
+        }
+      );
+    return unsubscribe;
+  }, []);
+
+  // เขียนหมวดเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานเพิ่ม/ลบหมวด
+  const updateCategories = (updater) => {
+    setCategories((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (FIREBASE_SYNC_ENABLED) {
+        db.collection("config")
+          .doc("categories")
+          .set({ items: next })
+          .catch((err) => console.error("บันทึกหมวดเมนูขึ้น Firestore ไม่สำเร็จ:", err));
+      }
+      return next;
+    });
   };
 
   // เขียนโปรโมชั่นกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ — ใช้จาก StaffPromoView
@@ -6494,6 +6770,8 @@ function App() {
             promos={promos}
             shopName={shopInfo.name}
             shopSlogan={shopInfo.slogan}
+            categories={categories}
+            shopHours={shopInfo}
           />
         )}
         {role === "customer" && customerStage === "checkout" && (
@@ -6505,6 +6783,7 @@ function App() {
             promos={promos}
             uid={uid}
             shopQr={shopInfo.qr}
+            deliveryHours={shopInfo}
           />
         )}
         {role === "customer" && customerStage === "success" && (
@@ -6536,6 +6815,8 @@ function App() {
             shopInfo={shopInfo}
             onSaveShopInfo={saveShopInfo}
             stockItems={stockItems}
+            categories={categories}
+            updateCategories={updateCategories}
           />
         )}
         {role === "staff-promos" && <StaffPromoView promos={promos} updatePromos={updatePromos} menu={menu} />}
