@@ -673,8 +673,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
   const [editingCartId, setEditingCartId] = useState(null); // กำลังแก้ไขรายการในตะกร้าอันไหน (null = เพิ่มใหม่)
 
   const tabs = ["all", ...(categories || DEFAULT_CATEGORIES).map((c) => c.id)];
+  // แสดงเมนูทุกตัว (รวมตัวที่สินค้าหมด — จะแสดงจาง ๆ + กดสั่งไม่ได้) ไม่กรองเมนูที่ `active: false` ออก
   const visibleMenu = menu.filter(
-    (m) => m.active && (openCat === "all" || m.category === openCat)
+    (m) => openCat === "all" || m.category === openCat
   );
 
   // แต่ละ "รายการในตะกร้า" คือ 1 คอมโบของ (เมนู + ชุดตัวเลือกเพิ่มที่เลือก) — ระบุด้วย cartId
@@ -903,6 +904,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
         {menuLoaded && visibleMenu.map((item) => {
           const Icon = CATEGORY_ICONS[item.category] || Utensils;
           const hasAddOns = item.addOns && item.addOns.length > 0;
+          // สินค้าหมด = ลูกค้ายังเห็นเมนูอยู่ แต่จางลง + กดสั่งไม่ได้ (พนักงานปิดที่ฟอร์มแก้ไขเมนู)
+          const soldOut = item.active === false;
           // ราคาหลังโปรโมชั่นลดราคาเมนู (ถ้ามี) — แสดงราคาเดิมขีดฆ่า + ป้าย %
           const discountedPrice = effectiveItemPrice(item, promos);
           const hasDiscount = discountedPrice < item.price;
@@ -916,7 +919,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           return (
             <div
               key={item.id}
-              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, opacity: soldOut ? 0.55 : 1 }}
               className="rounded-2xl p-4 flex gap-3 items-start"
             >
               {item.img ? (
@@ -937,6 +940,11 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
               <div className="flex-1 min-w-0">
                 <h3 style={{ color: COLORS.ink }} className="font-semibold text-[15px]">
                   {item.name}
+                  {soldOut && (
+                    <span style={{ background: COLORS.paper, color: COLORS.inkSoft }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
+                      หมดแล้ว
+                    </span>
+                  )}
                 </h3>
                 <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5 leading-relaxed">
                   {item.desc}
@@ -964,9 +972,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                         </span>
                       )}
                       <button
-                        onClick={() => shopOpen && openAddOnSheet(item)}
-                        disabled={!shopOpen}
-                        style={{ background: shopOpen ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
+                        onClick={() => shopOpen && !soldOut && openAddOnSheet(item)}
+                        disabled={!shopOpen || soldOut}
+                        style={{ background: shopOpen && !soldOut ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
                         className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                       >
                         <Plus size={16} />
@@ -974,9 +982,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                     </div>
                   ) : !inCart ? (
                     <button
-                      onClick={() => shopOpen && addToCart(item)}
-                      disabled={!shopOpen}
-                      style={{ background: shopOpen ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
+                      onClick={() => shopOpen && !soldOut && addToCart(item)}
+                      disabled={!shopOpen || soldOut}
+                      style={{ background: shopOpen && !soldOut ? COLORS.caramel : "#D9CBB5", color: "#FFF9F0" }}
                       className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform disabled:cursor-not-allowed"
                     >
                       <Plus size={16} />
@@ -997,8 +1005,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                         {inCart.qty}
                       </span>
                       <button
-                        onClick={() => changeQty(item.id, 1)}
-                        style={{ color: COLORS.caramelDark }}
+                        onClick={() => !soldOut && changeQty(item.id, 1)}
+                        style={{ color: soldOut ? COLORS.inkSoft : COLORS.caramelDark, opacity: soldOut ? 0.5 : 1 }}
                         className="w-7 h-7 flex items-center justify-center active:scale-90"
                       >
                         <Plus size={14} />
@@ -2152,6 +2160,9 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   // ---- จัดการหมวดเมนู: เพิ่ม/ลบหมวด + สถานะยืนยันการลบ (กด 2 ครั้ง) ----
   const [newCatName, setNewCatName] = useState("");
   const [confirmDelCat, setConfirmDelCat] = useState(null);
+  const [editingCat, setEditingCat] = useState(null); // หมวดที่กำลังแก้ไข (เปิดฟอร์มย่อย)
+  const [catEditName, setCatEditName] = useState(""); // ชื่อหมวดในฟอร์มแก้ไข
+  const [confirmDelMenu, setConfirmDelMenu] = useState(false); // ยืนยันลบเมนูจากฟอร์ม (กด 2 ครั้ง)
   // ---- ลากวาง (HTML5 drag & drop): สลับตำแหน่งเมนู / ย้ายข้ามหมวด / เรียงลำดับหมวด ----
   const [dragItem, setDragItem] = useState(null); // { id, cat } รายการเมนูที่กำลังลาก
   const [overItem, setOverItem] = useState(null); // { id, cat } จุดที่กำลังจะปล่อย (ไฮไลต์)
@@ -2254,6 +2265,31 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
     setConfirmDelCat(null);
   };
 
+  // เปิดฟอร์มแก้ไขหมวด (แตะที่แถวหมวด) — เปลี่ยนชื่อ + ปุ่มลบหมวดอยู่ที่นี่
+  const openCatEdit = (c) => {
+    setConfirmDelCat(null);
+    setEditingCat(c);
+    setCatEditName(c.label);
+  };
+
+  const saveCategory = () => {
+    const label = catEditName.trim();
+    if (!editingCat || !label) return;
+    updateCategories((prev) => (prev && prev.length ? prev : DEFAULT_CATEGORIES).map((c) => (c.id === editingCat.id ? { ...c, label } : c)));
+    setEditingCat(null);
+  };
+
+  const deleteCatFromForm = () => {
+    if (!editingCat) return;
+    if (confirmDelCat !== editingCat.id) {
+      setConfirmDelCat(editingCat.id);
+      setTimeout(() => setConfirmDelCat((v) => (v === editingCat.id ? null : v)), 3500);
+      return;
+    }
+    deleteCategory(editingCat.id);
+    setEditingCat(null);
+  };
+
   // สร้างภาพลาก (drag image) ให้เป็นกล่องเล็ก ๆ ตามชื่อเมนู/หมวด — กันเบราว์เซอร์แสดงภาพลากเป็นกล่องขาว/ใหญ่เกิน
   // (ตอนนี้ลากได้ทั้งการ์ด ไม่ใช่แค่ที่จับ ☰ — ต้องตั้ง drag image เองทุกครั้ง)
   const makeDragImage = (label) => {
@@ -2335,9 +2371,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   // ---- ลากวางด้วยนิ้ว (จอสัมผัส) — HTML5 drag & drop ใช้กับเมาส์เท่านั้น เลยจำลอง touch drag เอง ----
   // หลักการ: นิ้วแตะที่จับ ☰ → สร้างกล่อง ghost ตามนิ้ว → นิ้วชี้ที่การ์ดไหน (elementFromPoint) ให้ไฮไลต์ → ปล่อยนิ้ว = drop เหมือนลากเมาส์
   const touchDragRef = useRef(null); // { kind:'item'|'cat', id, cat, ghost, startX, startY, moved, lastX, lastY, raf }
+  const pendingTouchRef = useRef(null); // { timer, kind, id, cat, label, x, y } — กดค้างรอเริ่มลาก (long-press)
+  const lastTouchDragEndRef = useRef(0); // เวลาที่ลากด้วยนิ้ว/เมาส์เพิ่งจบ — กันการคลิกหลังลากไปเปิดแก้ไข
 
-  const startTouchDrag = (e, kind, id, cat, label) => {
-    const t = e.touches && e.touches[0];
+  const startTouchDrag = (t, kind, id, cat, label) => {
     if (!t) return;
     const ghost = document.createElement("div");
     ghost.textContent = label;
@@ -2416,6 +2453,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
     if (d) {
       if (d.raf) cancelAnimationFrame(d.raf);
       if (d.ghost && d.ghost.parentNode) d.ghost.parentNode.removeChild(d.ghost);
+      lastTouchDragEndRef.current = Date.now(); // เพิ่งลากเสร็จ — คลิกถัดไป (ถ้ามี) ไม่ควรเปิดแก้ไข
     }
     if (d && d.moved && t) {
       const under = document.elementFromPoint(t.clientX, t.clientY);
@@ -2450,18 +2488,66 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   // ป้องกัน scroll ไม่ได้และบางสภาพแวดล้อมไม่ยิง เลยใช้ native แทน แล้วอ่านข้อมูลจาก data-* ของที่จับ)
   useEffect(() => {
     const onStart = (e) => {
-      const grip = e.target && e.target.closest ? e.target.closest("[data-touch-grip]") : null;
-      if (!grip) return;
-      e.preventDefault(); // กันนิ้วลากแล้วหน้าเลื่อน/ซูม
-      startTouchDrag(e, grip.dataset.touchKind, grip.dataset.touchId, grip.dataset.touchCat, grip.dataset.touchLabel);
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      const closest = (sel) => (e.target && e.target.closest ? e.target.closest(sel) : null);
+      // ที่จับ ☰ — เริ่มลากได้ทันที (ตัว grip ตั้ง touchAction:none กันหน้าเลื่อนอยู่แล้ว)
+      const grip = closest("[data-touch-grip]");
+      if (grip) {
+        e.preventDefault(); // กันนิ้วลากแล้วหน้าเลื่อน/ซูม
+        startTouchDrag(t, grip.dataset.touchKind, grip.dataset.touchId, grip.dataset.touchCat, grip.dataset.touchLabel);
+        return;
+      }
+      // แตะบนการ์ดเมนู/แถวหมวดโดยตรง (ไม่ใช่ปุ่ม/อินพุต) → กดค้าง 300ms แล้วค่อยเริ่มลาก
+      // (ต้องกดค้างก่อน ไม่งั้นนิ้วที่เลื่อนหน้าปกติจะโดนแย่งไปลากการ์ดตลอด)
+      if (pendingTouchRef.current) { clearTimeout(pendingTouchRef.current.timer); pendingTouchRef.current = null; }
+      const interactive = closest("button, input, select, textarea, a, label");
+      if (interactive) return;
+      const card = closest("[data-item-id]");
+      const row = !card ? closest("[data-cat-id]") : null;
+      const kind = card ? "item" : row ? "cat" : null;
+      if (!kind) return;
+      const el = card || row;
+      const id = card ? card.dataset.itemId : row.dataset.catId;
+      const cat = card ? card.dataset.cat : "";
+      const label = el.dataset.touchLabel || "";
+      const timer = setTimeout(() => {
+        if (!pendingTouchRef.current) return;
+        pendingTouchRef.current = null;
+        startTouchDrag(t, kind, id, cat, label);
+      }, 300);
+      pendingTouchRef.current = { timer, kind, id, cat, label, x: t.clientX, y: t.clientY };
     };
     const onMove = (e) => {
-      if (!touchDragRef.current) return;
+      const t = e.touches && e.touches[0];
+      // ยังแค่กดค้างรอ (pending) — นิ้วขยับเกิน 8px = ตั้งใจเลื่อนหน้า ให้ยกเลิกการรอลาก
+      const p = pendingTouchRef.current;
+      if (p) {
+        if (t && Math.abs(t.clientX - p.x) + Math.abs(t.clientY - p.y) > 8) {
+          clearTimeout(p.timer);
+          pendingTouchRef.current = null;
+        }
+        return;
+      }
+      const d = touchDragRef.current;
+      if (!d) return;
+      // ยังไม่เริ่มลากจริง (เพิ่งกดค้างขึ้นมา) — ปล่อยให้เลื่อนหน้าได้จนกว่าจะขยับเกิน 8px
+      if (!d.moved && t) {
+        const dx = t.clientX - d.startX;
+        const dy = t.clientY - d.startY;
+        if (Math.abs(dx) + Math.abs(dy) < 8) return;
+      }
       e.preventDefault();
       moveTouchDrag(e);
     };
-    const onEnd = (e) => { if (touchDragRef.current) endTouchDrag(e); };
-    const onCancel = () => { if (touchDragRef.current) cancelTouchDrag(); };
+    const onEnd = (e) => {
+      if (pendingTouchRef.current) { clearTimeout(pendingTouchRef.current.timer); pendingTouchRef.current = null; }
+      if (touchDragRef.current) endTouchDrag(e);
+    };
+    const onCancel = () => {
+      if (pendingTouchRef.current) { clearTimeout(pendingTouchRef.current.timer); pendingTouchRef.current = null; }
+      if (touchDragRef.current) cancelTouchDrag();
+    };
     document.addEventListener("touchstart", onStart, { passive: false });
     document.addEventListener("touchmove", onMove, { passive: false });
     document.addEventListener("touchend", onEnd);
@@ -2477,6 +2563,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   const startEdit = (item) => {
     // ให้เลข id ใหม่ต่อจาก id ที่มีอยู่แล้วในเมนู (กัน id ซ้ำข้าม session)
     seedAddOnCounters(menu);
+    setConfirmDelMenu(false);
     setEditing(item.id);
     // แปลงข้อมูลเก่า (list ราบ) ให้เป็น "กลุ่ม" แล้วเรียงตัวเลือกในแต่ละกลุ่มตามราคาน้อยไปมาก
     const groups = normalizeAddOnGroups(item.addOns).map((g) => ({
@@ -2492,6 +2579,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
       addOns: groups,
       cost: item.cost != null && item.cost !== "" ? String(item.cost) : "",
       recipe: Object.fromEntries(Object.entries(item.recipe || {}).map(([k, v]) => [k, String(v)])),
+      active: item.active !== false,
     });
     setNewOptionName({});
     setNewOptionPrice({});
@@ -2501,7 +2589,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
     seedAddOnCounters(menu);
     setEditing("new");
     const firstCat = (categories && categories[0] && categories[0].id) || "drink";
-    setForm({ name: "", desc: "", price: "", category: firstCat, img: "", addOns: [], cost: "", recipe: {} });
+    setForm({ name: "", desc: "", price: "", category: firstCat, img: "", addOns: [], cost: "", recipe: {}, active: true });
     setNewOptionName({});
     setNewOptionPrice({});
   };
@@ -2594,13 +2682,13 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
     if (editing === "new") {
       setMenu((prev) => [
         ...prev,
-        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: true, img: form.img, addOns, cost: costNum, recipe },
+        { id: nextId(), name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, active: form.active !== false, img: form.img, addOns, cost: costNum, recipe },
       ]);
     } else {
       setMenu((prev) =>
         prev.map((m) =>
           m.id === editing
-            ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns, cost: costNum, recipe }
+            ? { ...m, name: form.name.trim(), desc: form.desc.trim(), price: priceNum, category: form.category, img: form.img, addOns, cost: costNum, recipe, active: form.active !== false }
             : m
         )
       );
@@ -2658,7 +2746,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
             จัดการเมนู
           </h1>
-          <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">เพิ่ม แก้ไข ซ่อน หรือลากจับ ☰ เพื่อสลับลำดับเมนู — ลูกศรสำหรับหน้าจอสัมผัส (ลูกค้าเห็นตามลำดับนี้)</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">แตะการ์ด = แก้ไข · กดค้าง (มือถือ) หรือลาก (คอม) = สลับลำดับ (ลูกค้าเห็นตามลำดับนี้)</p>
         </div>
         <button
           onClick={startNew}
@@ -2844,7 +2932,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           </p>
         </div>
         <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
-          เพิ่ม/ลบหมวดอาหาร — ลูกค้าจะเห็นแท็บหมวดเหล่านี้บนหน้าสั่งของ (ลากจับ ☰ เพื่อเรียงลำดับหมวด หรือกด ▲▼ ด้านขวา)
+          เพิ่ม/ลบหมวดอาหาร — ลูกค้าจะเห็นแท็บหมวดเหล่านี้บนหน้าสั่งของ (แตะหมวด = แก้ไข/ลบ · ลากหรือกดค้าง = เรียงลำดับ)
         </p>
         <div className="space-y-2 mb-3">
           {(categories || DEFAULT_CATEGORIES).map((c) => (
@@ -2852,6 +2940,13 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
               key={c.id}
               draggable
               data-cat-id={c.id}
+              data-touch-label={c.label}
+              onClick={(e) => {
+                // แตะ/คลิกที่แถว = เปิดฟอร์มแก้ไข/ลบหมวด (กันปุ่มภายใน และกันคลิกหลังลากเสร็จ)
+                if (e.target && e.target.closest && e.target.closest("button, input, select, textarea, a, label")) return;
+                if (Date.now() - lastTouchDragEndRef.current < 700) return;
+                openCatEdit(c);
+              }}
               onDragStart={(e) => {
                 setDragCat(c.id);
                 setOverCat(c.id);
@@ -2864,58 +2959,18 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overCat !== c.id) setOverCat(c.id); }}
               onDragLeave={(e) => { if (e.currentTarget.contains(e.relatedTarget)) return; setOverCat((o) => (o === c.id ? null : o)); }}
               onDrop={(e) => { e.preventDefault(); dropCategory(c.id); setDragCat(null); setOverCat(null); }}
-              onDragEnd={() => { setDragCat(null); setOverCat(null); }}
-              className="cursor-grab active:cursor-grabbing flex flex-wrap items-center rounded-xl px-3 py-2.5 transition-colors"
+              onDragEnd={() => { setDragCat(null); setOverCat(null); lastTouchDragEndRef.current = Date.now(); }}
+              className="cursor-grab active:cursor-grabbing flex items-center rounded-xl px-3 py-2.5 transition-colors"
               style={{
+                cursor: "pointer",
                 background: overCat === c.id ? COLORS.peachSoft : COLORS.cream,
                 border: overCat === c.id ? `1.5px solid ${COLORS.caramel}` : `1px solid ${COLORS.line}`,
               }}
             >
-              <div className="flex items-center gap-1.5 min-w-0 mr-auto">
-                {/* ที่จับลาก — ลากทั้งแถวได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
-                <div
-                  data-touch-grip
-                  data-touch-kind="cat"
-                  data-touch-id={c.id}
-                  data-touch-cat=""
-                  data-touch-label={c.label}
-                  aria-label={`ลากเพื่อย้ายหมวด ${c.label}`}
-                  className="flex items-center px-0.5 -ml-1 py-1 rounded-lg"
-                  style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
-                >
-                  <GripVertical size={15} />
-                </div>
-                <span style={{ color: COLORS.ink }} className="text-sm font-medium truncate">{c.label}</span>
-              </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {/* ปุ่มย้ายหมวดขึ้น/ลง — สำรองสำหรับจอสัมผัสที่ลากไม่ถนัด */}
-                <button
-                  onClick={() => moveCategory(c.id, -1)}
-                  aria-label={`ย้ายหมวด ${c.label} ขึ้น`}
-                  style={{ color: COLORS.inkSoft }}
-                  className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
-                >
-                  <ChevronUp size={14} />
-                </button>
-                <button
-                  onClick={() => moveCategory(c.id, 1)}
-                  aria-label={`ย้ายหมวด ${c.label} ลง`}
-                  style={{ color: COLORS.inkSoft }}
-                  className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
-                >
-                  <ChevronDown size={14} />
-                </button>
-                <span style={{ color: COLORS.inkSoft }} className="text-[11px] mx-1">
-                  {menu.filter((m) => m.category === c.id).length} เมนู
-                </span>
-                <button
-                  onClick={() => deleteCategory(c.id)}
-                  style={confirmDelCat === c.id ? { background: "#C0533F", color: "#FFF" } : { color: "#C0533F" }}
-                  className="text-[11px] font-semibold rounded-lg px-2.5 py-1.5 transition-colors"
-                >
-                  {confirmDelCat === c.id ? "กดอีกครั้งเพื่อยืนยัน" : "ลบ"}
-                </button>
-              </div>
+              <span style={{ color: COLORS.ink }} className="text-sm font-medium truncate flex-1 min-w-0">{c.label}</span>
+              <span style={{ color: COLORS.inkSoft }} className="text-[11px] flex-shrink-0">
+                {menu.filter((m) => m.category === c.id).length} เมนู
+              </span>
             </div>
           ))}
         </div>
@@ -2958,6 +3013,13 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                 draggable
                 data-item-id={item.id}
                 data-cat={item.category}
+                data-touch-label={item.name}
+                onClick={(e) => {
+                  // กด/แตะทีเดียว = เปิดแก้ไขเมนู (ไม่รวมปุ่มในตัวการ์ด และไม่รวมหลังเพิ่งลากเสร็จ)
+                  if (e.target && e.target.closest && e.target.closest("button, input, select, textarea, a, label")) return;
+                  if (Date.now() - lastTouchDragEndRef.current < 700) return;
+                  startEdit(item);
+                }}
                 onDragStart={(e) => {
                   setDragItem({ id: item.id, cat: item.category });
                   e.dataTransfer.effectAllowed = "move";
@@ -2987,51 +3049,17 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                   setDragItem(null);
                   setOverItem(null);
                 }}
-                onDragEnd={() => { setDragItem(null); setOverItem(null); }}
+                onDragEnd={() => { setDragItem(null); setOverItem(null); lastTouchDragEndRef.current = Date.now(); }}
                 style={{
+                  cursor: "pointer",
                   background: overItem && overItem.id === item.id ? COLORS.peachSoft : "#FFFFFF",
                   border: overItem && overItem.id === item.id ? `1.5px solid ${COLORS.caramel}` : `1px solid ${COLORS.line}`,
                   opacity: item.active ? 1 : 0.5,
                 }}
-                className="rounded-xl p-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2 transition-colors"
+                className="rounded-xl p-3.5 flex items-center gap-3 transition-colors"
               >
-                {/* กลุ่มซ้าย: ที่จับลาก + ลูกศร — จอแคบจะอยู่แถวบนเสมอ */}
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {/* ที่จับลาก — ลากทั้งการ์ดได้เลย (หรือแตะค้าง ☰ แล้วลากด้วยนิ้ว) */}
-                  <div
-                    data-touch-grip
-                    data-touch-kind="item"
-                    data-touch-id={item.id}
-                    data-touch-cat={item.category}
-                    data-touch-label={item.name}
-                    aria-label={`ลากเพื่อย้าย ${item.name}`}
-                    className="flex items-center px-0.5 -ml-1 py-2 rounded-lg"
-                    style={{ color: COLORS.inkSoft, touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
-                  >
-                    <GripVertical size={16} />
-                  </div>
-                  {/* ลูกศรสลับตำแหน่งขึ้น/ลง (ภายในหมวดเดียวกัน) — สำรองสำหรับหน้าจอสัมผัส */}
-                  <div className="flex flex-col gap-1">
-                    <button
-                      onClick={() => moveItem(item.id, -1)}
-                      aria-label={`เลื่อน ${item.name} ขึ้น`}
-                      style={{ color: COLORS.inkSoft }}
-                      className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
-                    >
-                      <ChevronUp size={14} />
-                    </button>
-                    <button
-                      onClick={() => moveItem(item.id, 1)}
-                      aria-label={`เลื่อน ${item.name} ลง`}
-                      style={{ color: COLORS.inkSoft }}
-                      className="w-6 h-6 flex items-center justify-center rounded-lg active:scale-90 transition-transform"
-                    >
-                      <ChevronDown size={14} />
-                    </button>
-                  </div>
-                </div>
-                {/* กลุ่มกลาง: รูป + รายละเอียด — กินพื้นที่เหลือ จอแคบจะได้ความกว้างเต็มแถว */}
-                <div className="flex items-center gap-3 min-w-0" style={{ flex: "1 1 150px" }}>
+                {/* รูป + รายละเอียด — กินพื้นที่เต็ม (แตะการ์ด = แก้ไข · กดค้าง/ลาก = สลับลำดับ) */}
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   {item.img ? (
                     <img src={item.img} alt={item.name} className="w-11 h-11 rounded-lg object-cover flex-shrink-0" style={{ border: `1px solid ${COLORS.line}` }} />
                   ) : (
@@ -3040,7 +3068,12 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                     </div>
                   )}
                   <div className="min-w-0">
-                    <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{item.name}</p>
+                    <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
+                      {item.name}
+                      {item.active === false && (
+                        <span style={{ background: COLORS.paper, color: COLORS.inkSoft }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">หมด</span>
+                      )}
+                    </p>
                     <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">{item.desc}</p>
                     <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold mt-0.5">
                       ฿{item.price}
@@ -3059,24 +3092,55 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
                     )}
                   </div>
                 </div>
-                {/* กลุ่มขวา: สถานะ + ปุ่มแก้/ลบ — จอแคบจะ wrap ลงแถวล่าง (ขวา) */}
-                <div className="flex items-center gap-1 ml-auto">
-                  <button onClick={() => toggleActive(item.id)} className="flex-shrink-0">
-                    <Chip tone={item.active ? "sage" : "caramel"}>{item.active ? "กำลังขาย" : "ซ่อนอยู่"}</Chip>
-                  </button>
-                  <button onClick={() => startEdit(item)} style={{ color: COLORS.inkSoft }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                    <Pencil size={15} />
-                  </button>
-                  <button onClick={() => remove(item.id)} style={{ color: "#C0533F" }} className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                    <Trash2 size={15} />
-                  </button>
-                </div>
               </div>
             ))}
           </div>
         </div>
         );
       })}
+
+      {/* แก้ไขหมวด (แตะที่แถวหมวด) — เปลี่ยนชื่อ + ลบหมวด */}
+      {editingCat && (
+        <div className="fixed inset-0 z-40 flex flex-col justify-end">
+          <div onClick={() => setEditingCat(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream, maxHeight: "60vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">แก้ไขหมวด</h2>
+              <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}>
+                <X size={20} />
+              </button>
+            </div>
+            <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อหมวด</label>
+            <input
+              value={catEditName}
+              onChange={(e) => setCatEditName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveCategory(); } }}
+              placeholder="ชื่อหมวด"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink, background: "#FFFFFF" }}
+              className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
+            />
+            <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
+              ชื่อหมวดคือแท็บที่ลูกค้าเห็นบนหน้าสั่งของ — เปลี่ยนแล้วอัปเดตทั้งร้านทันที
+            </p>
+            <div className="flex gap-2 mt-5">
+              <button
+                type="button"
+                onClick={deleteCatFromForm}
+                style={confirmDelCat === editingCat.id ? { background: "#C0533F", color: "#FFF" } : { border: `1px solid #C0533F`, color: "#C0533F" }}
+                className="rounded-xl px-4 py-2.5 text-sm font-semibold flex-shrink-0"
+              >
+                {confirmDelCat === editingCat.id ? "กดอีกครั้งเพื่อยืนยัน" : "ลบหมวด"}
+              </button>
+              <PrimaryButton full onClick={saveCategory} disabled={!catEditName.trim()}>
+                บันทึก
+              </PrimaryButton>
+            </div>
+            <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-2">
+              เมื่อลบหมวด เมนูที่อยู่ในหมวดนี้จะย้ายไปหมวดแรกที่เหลืออยู่โดยอัตโนมัติ
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Edit/new drawer */}
       {editing && (
@@ -3471,7 +3535,42 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
               </div>
             </div>
 
-            <div className="flex gap-2 mt-5">
+            <div className="flex items-center justify-between pt-1 mt-4">
+              <button onClick={() => setForm((f) => ({ ...f, active: !f.active }))} className="flex items-center gap-2">
+                <span
+                  style={{ background: form.active ? COLORS.sage : "#D8CBB8", width: 40, height: 22, borderRadius: 999 }}
+                  className="relative inline-block"
+                >
+                  <span
+                    style={{ left: form.active ? 20 : 3, background: "#FFF", width: 16, height: 16, borderRadius: 999, top: 3 }}
+                    className="absolute transition-all"
+                  />
+                </span>
+                <span style={{ color: COLORS.ink }} className="text-sm font-medium">
+                  {form.active ? "มีของ (ลูกค้าสั่งได้)" : "สินค้าหมด (ลูกค้ากดสั่งไม่ได้)"}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              {editing !== "new" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirmDelMenu) {
+                      setConfirmDelMenu(true);
+                      setTimeout(() => setConfirmDelMenu(false), 3500);
+                      return;
+                    }
+                    setConfirmDelMenu(false);
+                    remove(editing);
+                  }}
+                  style={confirmDelMenu ? { background: "#C0533F", color: "#FFF" } : { border: `1px solid #C0533F`, color: "#C0533F" }}
+                  className="rounded-xl px-4 py-2.5 text-sm font-semibold flex items-center gap-1.5 flex-shrink-0"
+                >
+                  <Trash2 size={15} /> {confirmDelMenu ? "กดอีกครั้งเพื่อยืนยัน" : "ลบเมนู"}
+                </button>
+              )}
               <PrimaryButton full onClick={save} disabled={!form.name.trim() || !form.price}>
                 บันทึกเมนู
               </PrimaryButton>
