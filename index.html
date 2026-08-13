@@ -551,17 +551,10 @@ const orderIsPaid = (order) =>
 // ออร์เดอร์เก่า (ไม่มีฟิลด์ collectOnDelivery) คิดจาก: เงินสด = ต้องเก็บตอนรับของ
 const orderCollectsOnDelivery = (order) =>
   order.collectOnDelivery === true ? true : order.collectOnDelivery === false ? false : order.paymentMethod === "cash";
-// เวลาที่ออร์เดอร์เข้ามา เช่น "14:32" — ไว้โชว์หัวการ์ดออร์เดอร์ ให้พนักงานรู้ว่าออร์เดอร์มานานแค่ไหน
+// เวลาที่ออร์เดอร์เข้ามาแบบกระชับ เช่น "14:32" — ไว้โชว์ในบรรทัดรายละเอียดการ์ดออร์เดอร์
 const formatOrderTime = (ms) => {
   const d = new Date(ms);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-};
-// ผ่านมาแล้วนานแค่ไหน เช่น "รอ 5 นาที" / "รอ 1 ชม. 15 นาที"
-const formatOrderWaiting = (ms) => {
-  const mins = Math.max(0, Math.floor((Date.now() - (ms || Date.now())) / 60000));
-  if (mins < 1) return "รอ <1 นาที";
-  if (mins < 60) return `รอ ${mins} นาที`;
-  return `รอ ${Math.floor(mins / 60)} ชม. ${mins % 60} นาที`;
 };
 
 // ---------- Delivery scheduling helpers ----------
@@ -4064,12 +4057,6 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 // ================= STAFF ORDERS VIEW =================
 function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onMarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
-  // อัปเดตเวลา "รอ X นาที" ทุก 30 วินาที — ให้พนักงานเห็นว่าออร์เดอร์นี้รอนานแค่ไหนแล้วโดยไม่ต้องรีเฟรช
-  const [, setNowTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
-    return () => clearInterval(t);
-  }, []);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
   const [deletePickIds, setDeletePickIds] = useState([]); // id ออร์เดอร์ที่ติ๊กเลือกไว้
@@ -4166,13 +4153,10 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
               className="rounded-2xl p-4"
             >
-              {/* หัวการ์ด: หมายเลขออร์เดอร์ + เวลาที่เข้ามา + ป้ายใหม่ + สถานะ + ลบถาวร */}
+              {/* หัวการ์ด: หมายเลขออร์เดอร์ + ป้ายใหม่ + สถานะ + ลบถาวร */}
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <span style={{ color: COLORS.ink }} className="font-bold text-sm flex-shrink-0">#{order.orderNo}</span>
-                  <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex items-center gap-1 whitespace-nowrap">
-                    <Clock size={11} /> {formatOrderTime(order.createdAt)} · {formatOrderWaiting(order.createdAt)}
-                  </span>
                   {recentOrderIds && recentOrderIds.has(order.id) && (
                     <span
                       style={{ background: "#C0533F", color: "#FFF9F0" }}
@@ -4204,7 +4188,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 </div>
               </div>
 
-              {/* ข้อมูลลูกค้า: ชื่อ + เบอร์โทร + ที่อยู่ — แยกบรรทัด อ่านง่าย */}
+              {/* ข้อมูลลูกค้า: ชื่อ + เบอร์โทร + ที่อยู่ + เวลาเข้ามา — แยกบรรทัด อ่านง่าย */}
               <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{order.customerName || "ไม่ระบุชื่อ"}</p>
               <div className="flex items-center gap-3 flex-wrap mt-0.5 mb-2">
                 {order.phone && (
@@ -4217,6 +4201,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     <MapPin size={11} /> {order.houseNo}
                   </span>
                 )}
+                <span style={{ color: COLORS.inkSoft }} className="text-xs flex items-center gap-1">
+                  <Clock size={11} /> {formatOrderTime(order.createdAt)}
+                </span>
               </div>
 
               {/* วิธีรับ + วิธีชำระเงิน */}
@@ -4720,12 +4707,6 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 // ให้พนักงานเห็นภาพรวมว่าแต่ละวันต้องจัดส่งกี่ออร์เดอร์ เวลาไหนบ้าง วางแผนออกรอบส่งได้ง่ายขึ้น
 function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
   const [confirmRevertId, setConfirmRevertId] = useState(null); // order id ที่รอป็อปอัพยืนยันย้อนกลับการจัดส่ง
-  // อัปเดตเวลา "รอ X นาที" ทุก 30 วินาที — ให้คนส่งเห็นว่าออร์เดอร์นี้รอมาสักพักแล้ว
-  const [, setNowTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
-    return () => clearInterval(t);
-  }, []);
   const statusMeta = {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: null },
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: null },
@@ -4768,7 +4749,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
         style={{ background: isDelivered ? "#EEF5EA" : "#FFFFFF", border: `1px solid ${COLORS.line}` }}
         className="rounded-2xl p-4"
       >
-        {/* หัวการ์ด: หมายเลขออร์เดอร์ + เวลานัดส่ง + เวลาที่ออร์เดอร์เข้ามา + สถานะ */}
+        {/* หัวการ์ด: หมายเลขออร์เดอร์ + เวลานัดส่ง + สถานะ */}
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span style={{ color: COLORS.ink }} className="font-bold text-sm flex-shrink-0">#{order.orderNo}</span>
@@ -4785,9 +4766,6 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
                 <Truck size={11} /> ส่งตอนนี้
               </span>
             )}
-            <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex items-center gap-1 whitespace-nowrap">
-              <Clock size={11} /> {formatOrderTime(order.createdAt)} · {formatOrderWaiting(order.createdAt)}
-            </span>
           </div>
           <span
             style={{ background: meta.bg, color: meta.color }}
@@ -4810,6 +4788,9 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
               <MapPin size={11} /> บ้านเลขที่ {order.houseNo || "-"}
             </span>
           )}
+          <span style={{ color: COLORS.inkSoft }} className="text-xs flex items-center gap-1">
+            <Clock size={11} /> {formatOrderTime(order.createdAt)}
+          </span>
         </div>
 
         {/* สถานะการจ่ายเงิน — คนส่งดูว่าต้องเก็บเงินไหม */}
@@ -7226,8 +7207,10 @@ function App() {
 
   // ฟังสต็อกวัตถุดิบจาก Firestore — พนักงานแก้ที่แท็บสต็อก/ผูกกับเมนูแล้วทุกเครื่องเห็นทันที
   // (เอกสารจะถูกสร้างเองตอนพนักงานบันทึกครั้งแรก — ไม่สร้างเอกสารว่างที่นี่ กันวนลูปบนเครื่องที่ไม่มีสิทธิ์)
+  // เฉพาะเครื่องพนักงานที่ปลดล็อกแล้วเท่านั้นที่ subscribe — เครื่องลูกค้าไม่แสดงข้อมูลนี้
+  // (เดิม subscribe บนทุกเครื่อง = ลูกค้าทุกคนที่เปิดหน้าค้างไว้กิน read ฟรีทุกครั้งที่พนักงานแก้)
   useEffect(() => {
-    if (!FIREBASE_SYNC_ENABLED) return;
+    if (!FIREBASE_SYNC_ENABLED || !staffUnlocked) return;
     const unsubscribe = db
       .collection("config")
       .doc("stock")
@@ -7254,11 +7237,13 @@ function App() {
         }
       );
     return unsubscribe;
-  }, []);
+  }, [staffUnlocked]);
 
   // ฟังรายจ่ายจาก Firestore — พนักงานเพิ่ม/ลบรายจ่ายที่แท็บบัญชีแล้วทุกเครื่องเห็นทันที
+  // เฉพาะเครื่องพนักงานที่ปลดล็อกแล้วเท่านั้นที่ subscribe — เครื่องลูกค้าไม่แสดงข้อมูลนี้
+  // (เดิม subscribe บนทุกเครื่อง = ลูกค้าทุกคนที่เปิดหน้าค้างไว้กิน read ฟรีทุกครั้งที่พนักงานแก้)
   useEffect(() => {
-    if (!FIREBASE_SYNC_ENABLED) return;
+    if (!FIREBASE_SYNC_ENABLED || !staffUnlocked) return;
     const unsubscribe = db
       .collection("config")
       .doc("expenses")
@@ -7284,11 +7269,13 @@ function App() {
         }
       );
     return unsubscribe;
-  }, []);
+  }, [staffUnlocked]);
 
   // ฟังรอบการขายรายวันจาก Firestore — เปิด/ปิดรอบจากเครื่องไหน ทุกเครื่องเห็นสถานะเดียวกัน
+  // เฉพาะเครื่องพนักงานที่ปลดล็อกแล้วเท่านั้นที่ subscribe — เครื่องลูกค้าไม่แสดงข้อมูลนี้
+  // (เดิม subscribe บนทุกเครื่อง = ลูกค้าทุกคนที่เปิดหน้าค้างไว้กิน read ฟรีทุกครั้งที่พนักงานแก้)
   useEffect(() => {
-    if (!FIREBASE_SYNC_ENABLED) return;
+    if (!FIREBASE_SYNC_ENABLED || !staffUnlocked) return;
     const unsubscribe = db
       .collection("config")
       .doc("salesRound")
@@ -7319,7 +7306,7 @@ function App() {
         }
       );
     return unsubscribe;
-  }, []);
+  }, [staffUnlocked]);
 
   // เขียนรอบการขายกลับขึ้น Firestore — ใช้จากแท็บบัญชี (เปิด/จดเบิกฝาก/ปิดรอบ)
   const updateSalesRound = (updater) => {
@@ -7452,6 +7439,9 @@ function App() {
   const updateCategories = (updater) => {
     setCategories((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
+      // กดย้ายหมวดขึ้น/ลงซ้ำตอนอยู่ขอบ หรือลากวางบนหมวดเดิม — ลำดับไม่เปลี่ยนจริง (next === prev)
+      // ข้ามการเขียน Firestore เลย กัน write + read ฟรีโดยไม่ได้เปลี่ยนอะไร
+      if (next === prev) return prev;
       if (FIREBASE_SYNC_ENABLED) {
         db.collection("config")
           .doc("categories")
@@ -7587,6 +7577,9 @@ function App() {
   const updateMenu = (updater) => {
     setMenu((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
+      // กดย้ายขึ้น/ลงซ้ำตอนอยู่ขอบ (บนสุด/ล่างสุด) — ลำดับไม่เปลี่ยนจริง (next === prev)
+      // ข้ามการเขียน Firestore เลย กัน write + read ฟรีโดยไม่ได้เปลี่ยนอะไร
+      if (next === prev) return prev;
       if (FIREBASE_SYNC_ENABLED) {
         db.collection("config").doc("menu").set({ items: next }).catch((err) => {
           console.error("บันทึกเมนูขึ้น Firestore ไม่สำเร็จ:", err);
