@@ -5522,16 +5522,28 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 // ================= STAFF: จัดการสิทธิ์พนักงาน =================
 // เฉพาะเครื่องที่ได้รับสิทธิ์แล้วเท่านั้นที่เข้าได้ — เพิ่ม/ลบสิทธิ์เครื่องพนักงานได้ที่นี่
 // (rules บังคับว่าเขียน/อ่านรายชื่อได้เฉพาะคนที่อยู่ใน staffUids อยู่แล้ว)
+
+// แปลง error จากการเพิ่ม/แก้/ลบสิทธิ์พนักงานเป็นข้อความที่เห็นแล้วรู้ว่าต้องแก้ตรงไหน
+// (เคสพบบ่อยสุดคือ rules ยังไม่เปิดเขียนให้ staffUids → บอกให้ไปอัปเดต rules ใน Firebase Console)
+const staffWriteErrorMsg = (err, action) => {
+  const code = String((err && (err.code || err.message)) || "");
+  if (code.includes("permission-denied") || code.includes("PERMISSION_DENIED")) {
+    return `ไม่สำเร็จ (${action}) — Firestore ปฏิเสธการเขียน ตรวจว่า rules ของ staffUids เปิดให้พนักงานเขียนได้แล้ว (Firebase Console → Firestore → Rules) แล้วลองใหม่`;
+  }
+  return `ไม่สำเร็จ (${action}) — ${code || "เกิดข้อผิดพลาด"} ตรวจอินเทอร์เน็ตแล้วลองใหม่`;
+};
+
 function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
   const [newUid, setNewUid] = useState("");
   const [newName, setNewName] = useState("");
   const [formError, setFormError] = useState("");
+  const [actionError, setActionError] = useState(""); // error จากการเพิ่ม/ลบ/ตั้งชื่อสิทธิ์ (โชว์แถบแดงใต้หัว)
   const [confirmRemove, setConfirmRemove] = useState(null);
   const [renameFor, setRenameFor] = useState(null); // uid ของเครื่องที่กำลังตั้งชื่อ
   const [renameValue, setRenameValue] = useState("");
   const [uidCopied, setUidCopied] = useState(false);
 
-  const add = () => {
+  const add = async () => {
     const v = newUid.trim();
     if (!v) return;
     if (staffMembers.some((m) => m.uid === v)) {
@@ -5543,15 +5555,26 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
       setFormError("รหัสอุปกรณ์ไม่ถูกต้อง — ให้คัดลอกจากจอ \"เครื่องนี้ยังไม่ได้รับสิทธิ์\" ของเครื่องนั้นมาตรง ๆ");
       return;
     }
-    onAdd(v, newName.trim());
+    const err = await onAdd(v, newName.trim());
+    if (err) {
+      // เขียนไม่สำเร็จ (เช่น rules ยังไม่เปิด) — โชว์เหตุผลให้เห็นแทนที่จะเงียบ ๆ
+      setActionError(err);
+      return;
+    }
     setNewUid("");
     setNewName("");
     setFormError("");
+    setActionError("");
   };
 
-  const remove = (v) => {
-    onRemove(v);
+  const remove = async (v) => {
+    const err = await onRemove(v);
+    if (err) {
+      setActionError(err);
+      return;
+    }
     setConfirmRemove(null);
+    setActionError("");
   };
 
   const copyUid = async () => {
@@ -5570,10 +5593,15 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
     setRenameValue(m.name || "");
   };
 
-  const saveRename = () => {
+  const saveRename = async () => {
     if (!renameFor) return;
-    onRename(renameFor, renameValue.trim());
+    const err = await onRename(renameFor, renameValue.trim());
+    if (err) {
+      setActionError(err);
+      return;
+    }
     setRenameFor(null);
+    setActionError("");
   };
 
   // ลบได้เฉพาะเครื่องอื่น และต้องเหลือพนักงานอย่างน้อย 1 เครื่อง (กันล็อกตัวเองออกทั้งร้าน)
@@ -5587,6 +5615,16 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
         เครื่องไหนได้รับอนุญาตให้เข้าหน้าพนักงานได้ — เพิ่ม/ลบได้ที่นี่ ซิงก์กับ Firebase ทันที
       </p>
+
+      {/* แจ้ง error จากการเพิ่ม/ลบ/ตั้งชื่อสิทธิ์ — เช่น rules ยังไม่เปิดเขียน จะได้เห็นเหตุผลทันที */}
+      {actionError && (
+        <div
+          style={{ background: "#F3D9D3", color: "#A03A2A", border: "1px solid #E4B4A9" }}
+          className="rounded-xl px-3.5 py-2.5 text-[11px] font-medium mb-4 leading-relaxed"
+        >
+          {actionError}
+        </div>
+      )}
 
       {/* เครื่องที่ใช้อยู่ */}
       <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5 mb-4">
@@ -7494,30 +7532,41 @@ function App() {
 
   // เพิ่มสิทธิ์พนักงานให้เครื่องใหม่ — เขียนเอกสาร staffUids/{uid}
   // (rules บังคับว่าต้องเป็นพนักงานที่มีสิทธิ์อยู่แล้วเท่านั้นถึงเขียนได้)
-  const addStaffUid = (targetUid, name) => {
-    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
-    db.collection("staffUids")
-      .doc(targetUid)
-      .set({ addedAt: Date.now(), name: name || "" })
-      .catch((err) => console.error("เพิ่มสิทธิ์พนักงานไม่สำเร็จ:", err));
+  // คืนข้อความ error ถ้าไม่สำเร็จ → หน้า "สิทธิ์พนักงาน" จะโชว์ให้เห็น แทนที่จะเงียบ ๆ แล้วงงว่าทำไมไม่ขึ้น
+  const addStaffUid = async (targetUid, name) => {
+    if (!targetUid) return "ไม่มีรหัสอุปกรณ์";
+    if (!FIREBASE_SYNC_ENABLED) return "เครื่องนี้ไม่ได้ต่อ Firebase — เปิดใช้งาน sync ก่อน";
+    try {
+      await db.collection("staffUids").doc(targetUid).set({ addedAt: Date.now(), name: name || "" });
+      return null;
+    } catch (err) {
+      console.error("เพิ่มสิทธิ์พนักงานไม่สำเร็จ:", err);
+      return staffWriteErrorMsg(err, "เพิ่มสิทธิ์");
+    }
   };
 
   // ตั้งชื่อ/แก้ชื่อเครื่องพนักงาน (เช่น ชื่อคนหรือตำแหน่ง) — เก็บในเอกสาร staffUids/{uid}
-  const renameStaffUid = (targetUid, name) => {
-    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
-    db.collection("staffUids")
-      .doc(targetUid)
-      .update({ name: name || "" })
-      .catch((err) => console.error("ตั้งชื่อเครื่องพนักงานไม่สำเร็จ:", err));
+  const renameStaffUid = async (targetUid, name) => {
+    if (!targetUid || !FIREBASE_SYNC_ENABLED) return null;
+    try {
+      await db.collection("staffUids").doc(targetUid).update({ name: name || "" });
+      return null;
+    } catch (err) {
+      console.error("ตั้งชื่อเครื่องพนักงานไม่สำเร็จ:", err);
+      return staffWriteErrorMsg(err, "ตั้งชื่อ");
+    }
   };
 
   // ลบสิทธิ์พนักงาน — เครื่องนั้นจะเข้าหน้าพนักงานไม่ได้ทันที
-  const removeStaffUid = (targetUid) => {
-    if (!targetUid || !FIREBASE_SYNC_ENABLED) return;
-    db.collection("staffUids")
-      .doc(targetUid)
-      .delete()
-      .catch((err) => console.error("ลบสิทธิ์พนักงานไม่สำเร็จ:", err));
+  const removeStaffUid = async (targetUid) => {
+    if (!targetUid || !FIREBASE_SYNC_ENABLED) return null;
+    try {
+      await db.collection("staffUids").doc(targetUid).delete();
+      return null;
+    } catch (err) {
+      console.error("ลบสิทธิ์พนักงานไม่สำเร็จ:", err);
+      return staffWriteErrorMsg(err, "ลบสิทธิ์");
+    }
   };
 
   // เขียนเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/เปิดปิดขาย)
