@@ -263,6 +263,21 @@ const seedAddOnCounters = (menu) => {
   addOnGroupIdCounter = max + 1;
 };
 
+// ตั้งค่าเลขลำดับ id ของเมนู/โปรโมชั่น ให้ต่อจาก id ที่มีอยู่แล้วในข้อมูลปัจจุบัน
+// (กัน id ซ้ำข้าม session — เดิม id เริ่มนับที่ 100 ใหม่ทุกครั้งที่โหลดหน้า ทำให้ของที่สร้าง
+// คนละ session ได้ id ชนกัน เช่น โปรโมชั่นตัวใหม่ได้ m100 ซ้ำกับตัวเก่า พอ id ซ้ำ
+// แก้/ลบ/เปิดปิดตัวเดียวจะกระทบทุกตัวที่ id ตรงกัน — อาการเดียวกับบั๊ก add-on เดิมที่แก้ไปแล้ว)
+const seedIdCounter = (menu, promos) => {
+  let max = 100;
+  const consider = (id) => {
+    const n = parseInt(String(id || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  };
+  (menu || []).forEach((m) => consider(m && m.id));
+  (promos || []).forEach((p) => consider(p && p.id));
+  idCounter = Math.max(idCounter, max + 1);
+};
+
 // แปลงข้อมูลตัวเลือกเพิ่มให้เป็นรูปแบบ "กลุ่ม" เสมอ — รองรับข้อมูลเก่า (list ราบ [{id,name,price}])
 // และข้อมูลที่บันทึกแบบไม่ครบโครงสร้าง (เช่น [{id,name}] ไม่มีราคา) ด้วย โดยมองเป็น 1 กลุ่มที่ไม่บังคับเลือก
 const normalizeAddOnGroups = (addOns) => {
@@ -302,6 +317,158 @@ const ensureUniqueAddOnIds = (groups) => {
 // ประเภท: discount = ลดราคาเมนู (เป็น % หรือบาท) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด (เป็น % หรือบาท) | byoc = นำแก้วมาเอง (ลดเป็นบาท) | threshold = ซื้อครบตามยอดแล้วลด (อัตโนมัติ)
 // โครงสร้าง: { id, name, type, active, discountPercent, discountBaht, minSpend, itemIds ([] = ทุกเมนู), addOnIds, code }
 const PROMO_TYPE_LABEL = { discount: "ลดราคาเมนู", freeAddOn: "ท็อปปิ้งฟรี", code: "โค้ดส่วนลด", byoc: "เอาแก้วมาเอง", threshold: "ซื้อครบลด" };
+
+// ตรวจ/ซ่อม id โปรโมชั่นให้ไม่ซ้ำกัน — ถ้ามี id ซ้ำหรือไม่มี id จะสร้าง id ใหม่ให้ตัวที่ซ้ำ
+// (ข้อมูลที่พังจากบั๊กเดิม: id เริ่มนับ 100 ใหม่ทุก session → โปรโมชั่นที่สร้างข้าม session ได้ id
+// ชนกัน พอ id ซ้ำ แก้/ลบ/เปิดปิดตัวเดียวจะกระทบทุกตัวที่ id ตรงกัน) คืน { items, changed }
+const ensureUniquePromoIds = (items) => {
+  let max = 100;
+  const seen = new Set();
+  let changed = false;
+  // ให้ counter เลยทุก id ที่มีอยู่ในลิสต์นี้ก่อน (กัน id ใหม่ที่สร้างเพื่อซ่อมชนกับของเดิม)
+  (items || []).forEach((p) => {
+    const n = parseInt(String((p && p.id) || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  });
+  idCounter = Math.max(idCounter, max + 1);
+  const fixed = (items || []).map((p) => {
+    if (!p || typeof p !== "object") return p;
+    const id = p.id && !seen.has(p.id) ? p.id : nextId();
+    if (id !== p.id) changed = true;
+    seen.add(id);
+    return id === p.id ? p : { ...p, id };
+  });
+  return { items: fixed, changed };
+};
+
+// ---------- กัน id ซ้ำข้าม session สำหรับสต็อก / รายจ่าย / รอบการขาย ----------
+// บั๊กเดียวกันกับเมนู/โปรโมชั่น: ตัวนับ id ของหน้าเหล่านี้เริ่ม 100 ใหม่ทุกครั้งที่โหลดหน้า
+// ทำให้ของที่สร้างคนละ session ได้ id ชนกัน (เช่น รายจ่ายตัวใหม่ได้ e100 ซ้ำกับตัวเก่า)
+// พอ id ซ้ำ แก้/ลบ/นับตัวเดียวจะกระทบทุกตัวที่ id ตรงกัน — วิธีแก้เหมือนที่ใช้กับโปรโมชั่น:
+// 1) seed ตัวนับต่อจาก id สูงสุดที่มีอยู่แล้ว  2) ซ่อม id ที่ซ้ำ/หายให้ใหม่ตอนโหลดข้อมูล
+
+// ตั้งค่าเลขลำดับ id ของสต็อก ให้ต่อจาก id ที่มีอยู่แล้วในข้อมูลปัจจุบัน
+const seedStockCounter = (stockItems) => {
+  let max = 100;
+  (stockItems || []).forEach((s) => {
+    const n = parseInt(String((s && s.id) || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  });
+  stockIdCounter = Math.max(stockIdCounter, max + 1);
+};
+
+// ตั้งค่าเลขลำดับ id ของรายจ่าย ให้ต่อจาก id ที่มีอยู่แล้วในข้อมูลปัจจุบัน
+const seedExpenseCounter = (expenses) => {
+  let max = 100;
+  (expenses || []).forEach((e) => {
+    const n = parseInt(String((e && e.id) || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  });
+  expenseIdCounter = Math.max(expenseIdCounter, max + 1);
+};
+
+// ตั้งค่าเลขลำดับ id ของรอบการขาย (sr…) และรายการเบิก/ฝากในรอบ (re…) ให้ต่อจาก id ที่มีอยู่แล้ว
+// ต้องดูทั้งรอบที่เปิดอยู่ (active) และประวัติรอบที่ปิดไปแล้ว (history)
+const seedSalesRoundCounters = (salesRound) => {
+  let maxRound = 100;
+  let maxEntry = 100;
+  const consider = (r) => {
+    if (!r || typeof r !== "object") return;
+    const n = parseInt(String(r.id || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > maxRound) maxRound = n;
+    (r.entries || []).forEach((en) => {
+      const m = parseInt(String((en && en.id) || "").replace(/^\D+/, ""), 10);
+      if (!Number.isNaN(m) && m > maxEntry) maxEntry = m;
+    });
+  };
+  consider(salesRound && salesRound.active);
+  ((salesRound && salesRound.history) || []).forEach(consider);
+  salesRoundIdCounter = Math.max(salesRoundIdCounter, maxRound + 1);
+  roundEntryIdCounter = Math.max(roundEntryIdCounter, maxEntry + 1);
+};
+
+// ซ่อม id สต็อกที่ซ้ำ/หายให้ไม่ซ้ำกัน — คืน { items, changed } ถ้าพบ id ซ้ำจะให้ id ใหม่กับตัวที่ซ้ำ
+const ensureUniqueStockIds = (items) => {
+  let max = 100;
+  const seen = new Set();
+  let changed = false;
+  (items || []).forEach((s) => {
+    const n = parseInt(String((s && s.id) || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  });
+  stockIdCounter = Math.max(stockIdCounter, max + 1);
+  const fixed = (items || []).map((s) => {
+    if (!s || typeof s !== "object") return s;
+    const id = s.id && !seen.has(s.id) ? s.id : nextStockId();
+    if (id !== s.id) changed = true;
+    seen.add(id);
+    return id === s.id ? s : { ...s, id };
+  });
+  return { items: fixed, changed };
+};
+
+// ซ่อม id รายจ่ายที่ซ้ำ/หายให้ไม่ซ้ำกัน — คืน { items, changed }
+const ensureUniqueExpenseIds = (items) => {
+  let max = 100;
+  const seen = new Set();
+  let changed = false;
+  (items || []).forEach((e) => {
+    const n = parseInt(String((e && e.id) || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  });
+  expenseIdCounter = Math.max(expenseIdCounter, max + 1);
+  const fixed = (items || []).map((e) => {
+    if (!e || typeof e !== "object") return e;
+    const id = e.id && !seen.has(e.id) ? e.id : nextExpenseId();
+    if (id !== e.id) changed = true;
+    seen.add(id);
+    return id === e.id ? e : { ...e, id };
+  });
+  return { items: fixed, changed };
+};
+
+// ซ่อม id รอบการขาย + รายการเบิก/ฝากที่ซ้ำ/หายให้ไม่ซ้ำกัน — คืน { active, history, changed }
+// (ตรวจทั้งรอบที่เปิดอยู่และประวัติ โดยใช้แผนที่ id กลางร่วมกัน กันรอบใหม่ได้ id ชนกับรอบเก่า)
+const ensureUniqueSalesRoundIds = (round) => {
+  if (!round) return { active: null, history: [], changed: false };
+  let maxRound = 100;
+  let maxEntry = 100;
+  const seenRounds = new Set();
+  const seenEntries = new Set();
+  let changed = false;
+  const bump = (r) => {
+    if (!r || typeof r !== "object") return;
+    const n = parseInt(String(r.id || "").replace(/^\D+/, ""), 10);
+    if (!Number.isNaN(n) && n > maxRound) maxRound = n;
+    (r.entries || []).forEach((en) => {
+      const m = parseInt(String((en && en.id) || "").replace(/^\D+/, ""), 10);
+      if (!Number.isNaN(m) && m > maxEntry) maxEntry = m;
+    });
+  };
+  bump(round.active);
+  (round.history || []).forEach(bump);
+  salesRoundIdCounter = Math.max(salesRoundIdCounter, maxRound + 1);
+  roundEntryIdCounter = Math.max(roundEntryIdCounter, maxEntry + 1);
+  const fixRound = (r) => {
+    if (!r || typeof r !== "object") return r;
+    const rid = r.id && !seenRounds.has(r.id) ? r.id : nextSalesRoundId();
+    if (rid !== r.id) changed = true;
+    seenRounds.add(rid);
+    const entries = (r.entries || []).map((en) => {
+      if (!en || typeof en !== "object") return en;
+      const eid = en.id && !seenEntries.has(en.id) ? en.id : nextRoundEntryId();
+      if (eid !== en.id) changed = true;
+      seenEntries.add(eid);
+      return eid === en.id ? en : { ...en, id: eid };
+    });
+    return rid === r.id ? { ...r, entries } : { ...r, id: rid, entries };
+  };
+  return {
+    active: round.active ? fixRound(round.active) : null,
+    history: (round.history || []).map(fixRound),
+    changed,
+  };
+};
 
 // % ลดสูงสุดของเมนูนี้จากโปรโมชั่นลดราคาที่เปิดใช้ (ตรงกับเมนู หรือเป็น "ทุกเมนู")
 const discountPercentFor = (itemId, promos) =>
@@ -373,6 +540,28 @@ const calcOrderTotal = (order) => {
   const subtotal = ((order && order.items) || []).reduce((s, i) => s + i.price * i.qty, 0);
   const discount = (order && order.discount && Number(order.discount.baht)) || 0;
   return Math.max(0, subtotal - discount);
+};
+
+// ---- สถานะการจ่ายเงินของออร์เดอร์ ----
+// จ่ายแล้ว = โอน + แนบสลิปตอนสั่ง | ยังไม่จ่าย = เก็บเงินตอนรับของ (เงินสด หรือ เก็บปลายทาง)
+// ออร์เดอร์เก่า (ไม่มีฟิลด์ paid) คิดจาก: มีสลิปและไม่ใช่เงินสด = จ่ายแล้ว / เงินสด = ยังไม่จ่าย
+const orderIsPaid = (order) =>
+  order.paid === true ? true : order.paid === false ? false : !!(order.slip && order.paymentMethod !== "cash");
+// ออร์เดอร์นี้ต้องเก็บเงินตอนรับของไหม (เงินสด หรือ ลูกค้าเลือก "เก็บปลายทาง") — คนส่งต้องรู้
+// ออร์เดอร์เก่า (ไม่มีฟิลด์ collectOnDelivery) คิดจาก: เงินสด = ต้องเก็บตอนรับของ
+const orderCollectsOnDelivery = (order) =>
+  order.collectOnDelivery === true ? true : order.collectOnDelivery === false ? false : order.paymentMethod === "cash";
+// เวลาที่ออร์เดอร์เข้ามา เช่น "14:32" — ไว้โชว์หัวการ์ดออร์เดอร์ ให้พนักงานรู้ว่าออร์เดอร์มานานแค่ไหน
+const formatOrderTime = (ms) => {
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+// ผ่านมาแล้วนานแค่ไหน เช่น "รอ 5 นาที" / "รอ 1 ชม. 15 นาที"
+const formatOrderWaiting = (ms) => {
+  const mins = Math.max(0, Math.floor((Date.now() - (ms || Date.now())) / 60000));
+  if (mins < 1) return "รอ <1 นาที";
+  if (mins < 60) return `รอ ${mins} นาที`;
+  return `รอ ${Math.floor(mins / 60)} ชม. ${mins % 60} นาที`;
 };
 
 // ---------- Delivery scheduling helpers ----------
@@ -463,6 +652,44 @@ function Chip({ children, tone = "caramel" }) {
       className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1"
     >
       {children}
+    </span>
+  );
+}
+
+// ป้ายสถานะการจ่ายเงิน — ใช้ทั้งการ์ดออร์เดอร์เข้าร้านและการ์ดคิวจัดส่ง
+// จ่ายแล้ว (โอน+แนบสลิป) = เขียว | ยังไม่จ่าย = แดง พร้อมยอดที่ต้องเก็บ + ปุ่ม "เก็บเงินแล้ว"
+// (คนส่งเก็บเงินสด/เก็บปลายทางจากลูกค้าแล้วค่อยกด — แล้วออร์เดอร์จะกลายเป็นจ่ายแล้ว)
+function PaymentStatusBadge({ order, onMarkPaid }) {
+  if (!order || order.status === "cancelled") return null;
+  const paid = orderIsPaid(order);
+  const total = calcOrderTotal(order);
+  if (paid) {
+    return (
+      <span
+        style={{ background: COLORS.sageSoft, color: COLORS.sage }}
+        className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 whitespace-nowrap"
+      >
+        <Check size={11} /> จ่ายแล้ว
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <span
+        style={{ background: "#F3D9D3", color: "#C0533F" }}
+        className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 whitespace-nowrap"
+      >
+        <Banknote size={11} /> ยังไม่จ่าย · เก็บ ฿{total}
+      </span>
+      {onMarkPaid && (
+        <button
+          onClick={() => onMarkPaid(order.id)}
+          style={{ border: `1px solid ${COLORS.sage}`, color: COLORS.sage, background: "#FFFFFF" }}
+          className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 active:scale-95 transition-transform"
+        >
+          <Check size={11} /> เก็บเงินแล้ว
+        </button>
+      )}
     </span>
   );
 }
@@ -651,6 +878,44 @@ function playNewOrderAlert() {
     });
   } catch (err) {
     console.error("Play new-order alert failed:", err);
+  }
+}
+
+// พูดแจ้งเตือนออร์เดอร์ใหม่เป็นประโยคด้วยเสียง (Text-to-Speech) — ต่อจากเสียง "ติ๊ง-ต่อง"
+// เพื่อให้พนักงานรู้ทันทีว่า "มีออเดอร์ใหม่เข้ามา" พร้อมเลขออเดอร์/จำนวนโดยไม่ต้องดูหน้าจอ
+// ใช้ speechSynthesis ของเบราว์เซอร์ ตั้งภาษาไทย (ถ้าเครื่องมีเสียงไทยจะใช้เสียงไทย ถ้าไม่มี
+// จะใช้เสียงเริ่มต้นแทน) — บางเบราว์เซอร์ต้องมีการแตะหน้าจอมาก่อน 1 ครั้งถึงจะพูดได้
+// ซึ่งพนักงานกด PIN เข้ามาแล้วนับว่าแตะแล้ว ถ้าเครื่องไหนพูดไม่ได้ก็เงียบ ๆ ไม่มีผลกับแอป
+const THAI_NUM_WORDS = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+function speakNewOrderAlert(count, orderNo) {
+  try {
+    if (!window.speechSynthesis) return;
+    // สร้างประโยค: 1 ออเดอร์ -> "มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ 123456" / หลายออเดอร์ -> "มีออเดอร์ใหม่เข้ามา 3 ออเดอร์"
+    let text;
+    const n = Number(count) || 1;
+    if (n > 1) {
+      const word = n <= 9 ? THAI_NUM_WORDS[n] : String(n);
+      text = `มีออเดอร์ใหม่เข้ามา ${word} ออเดอร์`;
+    } else if (orderNo) {
+      text = `มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ ${orderNo}`;
+    } else {
+      text = "มีออเดอร์ใหม่เข้ามา";
+    }
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "th-TH";
+    utter.rate = 1;
+    utter.pitch = 1.1;
+    // เลือกเสียงไทยถ้ามี (getVoices อาจยังว่างตอนโหลดแรก — ถ้าไม่มีก็ปล่อยให้ใช้เสียงเริ่มต้น)
+    const voices = window.speechSynthesis.getVoices();
+    const thVoice = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("th"));
+    if (thVoice) utter.voice = thVoice;
+    // ตัดเสียงที่ยังพูดค้างอยู่ก่อน กันประโยคซ้อนทับกัน แล้วค่อยพูดประโยคใหม่
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      window.speechSynthesis.cancel();
+    }
+    window.speechSynthesis.speak(utter);
+  } catch (err) {
+    console.error("Speak new-order alert failed:", err);
   }
 }
 
@@ -1355,6 +1620,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 // ================= CHECKOUT VIEW =================
 function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliveryHours }) {
   const [method, setMethod] = useState("cash"); // default: จ่ายเงินสด (จ่ายตอนรับของ) — บัตรเครดิตยังไม่รองรับ เลยไม่มีตัวเลือก
+  const [collectOnDelivery, setCollectOnDelivery] = useState(false); // โอนแต่เลือก "เก็บปลายทาง" = ไม่ต้องแนบสลิป (จ่ายตอนรับของ)
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [slipImg, setSlipImg] = useState(null); // { dataUrl, url } — url == dataUrl เสมอ (เก็บฝังใน Firestore ตรง ๆ)
@@ -1524,14 +1790,20 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       deliveryNow: deliveryMethod === "delivery" && deliveryNow, // ส่งตอนนี้ (เร็วที่สุด) — ฝั่งพนักงานจะเห็นป้ายนี้
     };
     if (isCash) {
-      onPaid(method, null, customer, getDiscount());
+      // เงินสด = เก็บเงินตอนรับของ (คนส่ง/หน้าร้านเก็บ) — ไม่ต้องแนบสลิป
+      onPaid(method, null, customer, getDiscount(), true);
+      return;
+    }
+    if (collectOnDelivery) {
+      // เลือก "เก็บปลายทาง" = ยังไม่ต้องโอนตอนนี้ จ่ายตอนรับของ — ไม่ต้องแนบสลิป
+      onPaid(method, null, customer, getDiscount(), true);
       return;
     }
     if (!slipImg) return;
     setPaying(true);
     setTimeout(() => {
       setPaying(false);
-      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer, getDiscount());
+      onPaid(method, { url: slipImg.url, dataUrl: slipImg.dataUrl }, customer, getDiscount(), false);
     }, 400);
   };
 
@@ -1835,7 +2107,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
         ].map((m) => (
           <button
             key={m.id}
-            onClick={() => setMethod(m.id)}
+            onClick={() => { setMethod(m.id); setCollectOnDelivery(false); }}
             style={{
               background: method === m.id ? COLORS.peachSoft : "#FFFFFF",
               border: `1.5px solid ${method === m.id ? COLORS.caramel : COLORS.line}`,
@@ -1867,7 +2139,34 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
         </div>
       ) : (
         <div className="mb-6">
-          {(method === "promptpay" && (shopQr || PROMPTPAY_QR_URL)) && (
+          {/* โอนแล้วแต่ยังไม่อยากโอนตอนนี้ — ติ๊ก "เก็บปลายทาง" ได้ ไม่ต้องแนบสลิป */}
+          <button
+            type="button"
+            onClick={() => setCollectOnDelivery(!collectOnDelivery)}
+            className="w-full flex items-center justify-between rounded-xl px-3.5 py-3 mb-2"
+            style={{ border: `1.5px solid ${collectOnDelivery ? COLORS.caramel : COLORS.line}`, background: collectOnDelivery ? COLORS.peachSoft : "#FFFFFF" }}
+          >
+            <span className="flex items-center gap-2.5">
+              <span
+                style={{ border: `2px solid ${collectOnDelivery ? COLORS.caramel : COLORS.line}`, background: collectOnDelivery ? COLORS.caramel : "transparent" }}
+                className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+              >
+                {collectOnDelivery && <Check size={10} color="#fff" />}
+              </span>
+              <span style={{ color: COLORS.ink }} className="text-sm font-medium">เก็บปลายทาง (จ่ายตอนรับของ)</span>
+            </span>
+            <span style={{ color: collectOnDelivery ? COLORS.caramelDark : COLORS.inkSoft }} className="text-xs font-bold">
+              {collectOnDelivery ? "ไม่ต้องแนบสลิป" : "ต้องแนบสลิป"}
+            </span>
+          </button>
+          {collectOnDelivery && (
+            <p style={{ background: COLORS.peachSoft, border: `1px dashed ${COLORS.caramel}` }} className="rounded-xl px-4 py-3 mb-3 text-xs">
+              <span style={{ color: COLORS.caramelDark }} className="font-semibold flex items-center gap-1.5">
+                <Banknote size={14} /> เก็บปลายทาง — เตรียมเงินสด ฿{total} ไว้จ่ายตอนรับของ พนักงานจะเก็บเงินให้ตอนส่ง
+              </span>
+            </p>
+          )}
+          {!collectOnDelivery && method === "promptpay" && (shopQr || PROMPTPAY_QR_URL) && (
             <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-xl p-4 mb-3 text-center">
               <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-3">สแกนจ่ายผ่านพร้อมเพย์</p>
               <img
@@ -1893,6 +2192,12 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
               </p>
             </div>
           )}
+          {collectOnDelivery && (
+            <p style={{ color: COLORS.inkSoft }} className="text-[11px] font-semibold mb-2">
+              ไม่ต้องอัปโหลดสลิป — ระบบจะจดไว้ว่าออร์เดอร์นี้ยังไม่จ่าย และพนักงานจะเก็บเงินตอนส่งของให้
+            </p>
+          )}
+          {!collectOnDelivery && (
           <div style={{ background: "#FFFFFF", border: `1.5px dashed ${COLORS.line}` }} className="rounded-xl p-4">
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">แนบสลิปการโอนเงิน</p>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
@@ -1949,16 +2254,19 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
               </div>
             )}
           </div>
+          )}
         </div>
       )}
 
       <ImageLightbox src={zoomedSlip} onClose={() => setZoomedSlip(null)} />
 
-      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && !slipImg)}>
+      <PrimaryButton full onClick={handleConfirm} disabled={paying || (!isCash && !slipImg && !collectOnDelivery)}>
         {paying
           ? "กำลังดำเนินการ..."
           : isCash
           ? "ยืนยันสั่งอาหาร"
+          : collectOnDelivery
+          ? "ยืนยันสั่งอาหาร (จ่ายตอนรับของ)"
           : `ยืนยันการโอน ฿${total}`}
       </PrimaryButton>
     </div>
@@ -2069,7 +2377,7 @@ function drawOrderReceipt(order, shopName) {
       info.push(["เวลาจัดส่ง", "ส่งตอนนี้ (เร็วที่สุด)"]);
     }
   }
-  info.push(["ชำระเงิน", order.paymentMethod === "cash" ? "เงินสด (จ่ายตอนรับสินค้า)" : "พร้อมเพย์/โอน"]);
+  info.push(["ชำระเงิน", orderIsPaid(order) ? "ชำระแล้ว" : orderCollectsOnDelivery(order) ? "ยังไม่จ่าย — เก็บปลายทาง" : "พร้อมเพย์/โอน"]);
 
   info.forEach(([k, v]) => {
     text(k, M, y, 14, 600, "#6B5642");
@@ -2220,9 +2528,9 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
           <Truck size={13} /> จัดส่งตอนนี้ — ร้านจะจัดส่งให้เร็วที่สุดเมื่อออร์เดอร์เสร็จ
         </p>
       ) : null}
-      {paymentMethod === "cash" && (
+      {(paymentMethod === "cash" || order?.collectOnDelivery) && (
         <p style={{ color: COLORS.caramelDark }} className="text-xs font-semibold mb-5">
-          อย่าลืมเตรียมเงินสด{customer?.method === "pickup" ? "มารับของ" : "จ่ายพนักงานตอนไปส่งของ"}นะครับ
+          อย่าลืมเตรียมเงิน{customer?.method === "pickup" ? "มารับของ" : "จ่ายพนักงานตอนไปส่งของ"}นะครับ
         </p>
       )}
 
@@ -2718,6 +3026,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 
   const startEdit = (item) => {
     // ให้เลข id ใหม่ต่อจาก id ที่มีอยู่แล้วในเมนู (กัน id ซ้ำข้าม session)
+    seedIdCounter(menu);
     seedAddOnCounters(menu);
     setConfirmDelMenu(false);
     setEditing(item.id);
@@ -2742,6 +3051,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
   };
 
   const startNew = () => {
+    seedIdCounter(menu);
     seedAddOnCounters(menu);
     setEditing("new");
     const firstCat = (categories && categories[0] && categories[0].id) || "drink";
@@ -3752,8 +4062,14 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onMarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
+  // อัปเดตเวลา "รอ X นาที" ทุก 30 วินาที — ให้พนักงานเห็นว่าออร์เดอร์นี้รอนานแค่ไหนแล้วโดยไม่ต้องรีเฟรช
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
   const [deletePickIds, setDeletePickIds] = useState([]); // id ออร์เดอร์ที่ติ๊กเลือกไว้
@@ -3850,10 +4166,13 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
               className="rounded-2xl p-4"
             >
-              {/* หัวการ์ด: หมายเลขออร์เดอร์ + ป้ายใหม่ + สถานะ + ลบถาวร */}
+              {/* หัวการ์ด: หมายเลขออร์เดอร์ + เวลาที่เข้ามา + ป้ายใหม่ + สถานะ + ลบถาวร */}
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <span style={{ color: COLORS.ink }} className="font-bold text-sm flex-shrink-0">#{order.orderNo}</span>
+                  <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex items-center gap-1 whitespace-nowrap">
+                    <Clock size={11} /> {formatOrderTime(order.createdAt)} · {formatOrderWaiting(order.createdAt)}
+                  </span>
                   {recentOrderIds && recentOrderIds.has(order.id) && (
                     <span
                       style={{ background: "#C0533F", color: "#FFF9F0" }}
@@ -3915,14 +4234,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     <Truck size={11} /> ส่งตอนนี้ (เร็วที่สุด)
                   </Chip>
                 ) : null}
-                {order.paymentMethod === "cash" && (
-                  <span
-                    style={{ background: "#F5EAC9", color: "#B08628" }}
-                    className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1"
-                  >
-                    <Banknote size={11} /> เก็บเงินสด
-                  </span>
-                )}
+                <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} />
                 {order.slip?.dataUrl && (
                   <span style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1">
                     <QrCode size={11} /> แนบสลิปแล้ว
@@ -4406,8 +4718,14 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 // ================= STAFF DELIVERY VIEW (จัดเรียงตามวัน-เวลาจัดส่ง) =================
 // รวมออร์เดอร์ที่ยังไม่ยกเลิกทั้งหมด จัดกลุ่มตามวันที่จัดส่ง แล้วเรียงเวลาไล่จากเช้าไปเย็นในแต่ละวัน
 // ให้พนักงานเห็นภาพรวมว่าแต่ละวันต้องจัดส่งกี่ออร์เดอร์ เวลาไหนบ้าง วางแผนออกรอบส่งได้ง่ายขึ้น
-function StaffDeliveryView({ orders, onAdvance }) {
+function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
   const [confirmRevertId, setConfirmRevertId] = useState(null); // order id ที่รอป็อปอัพยืนยันย้อนกลับการจัดส่ง
+  // อัปเดตเวลา "รอ X นาที" ทุก 30 วินาที — ให้คนส่งเห็นว่าออร์เดอร์นี้รอมาสักพักแล้ว
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setNowTick((x) => x + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
   const statusMeta = {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: null },
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: null },
@@ -4438,6 +4756,134 @@ function StaffDeliveryView({ orders, onAdvance }) {
 
   const totalScheduled = scheduled.length;
 
+  // การ์ดออร์เดอร์ในคิวจัดส่ง — รูปแบบเดียวกับการ์ดออร์เดอร์เข้าร้าน (ชื่อ/เบอร์/ที่อยู่แยกบรรทัด)
+  // + ป้ายสถานะการจ่ายเงิน ให้คนส่งรู้ว่าต้องเก็บเงินตอนไปส่งไหม
+  const renderCard = (order) => {
+    const meta = statusMeta[order.status];
+    const total = calcOrderTotal(order);
+    const isDelivered = order.status === "delivered";
+    return (
+      <div
+        key={order.id}
+        style={{ background: isDelivered ? "#EEF5EA" : "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+        className="rounded-2xl p-4"
+      >
+        {/* หัวการ์ด: หมายเลขออร์เดอร์ + เวลานัดส่ง + เวลาที่ออร์เดอร์เข้ามา + สถานะ */}
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span style={{ color: COLORS.ink }} className="font-bold text-sm flex-shrink-0">#{order.orderNo}</span>
+            {order.method === "pickup" ? (
+              <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
+                <ChefHat size={11} /> รับที่ร้าน
+              </span>
+            ) : order.deliveryTime ? (
+              <span style={{ background: COLORS.paper, color: COLORS.caramelDark }} className="text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
+                <Clock size={11} /> {order.deliveryTime} น.
+              </span>
+            ) : (
+              <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
+                <Truck size={11} /> ส่งตอนนี้
+              </span>
+            )}
+            <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex items-center gap-1 whitespace-nowrap">
+              <Clock size={11} /> {formatOrderTime(order.createdAt)} · {formatOrderWaiting(order.createdAt)}
+            </span>
+          </div>
+          <span
+            style={{ background: meta.bg, color: meta.color }}
+            className="text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1 whitespace-nowrap flex-shrink-0"
+          >
+            {meta.label}
+          </span>
+        </div>
+
+        {/* ชื่อ / เบอร์ / ที่อยู่ — แยกบรรทัด อ่านง่าย */}
+        <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{order.customerName || "ไม่ระบุชื่อ"}</p>
+        <div className="flex items-center gap-3 flex-wrap mt-0.5 mb-2">
+          {order.phone && (
+            <span style={{ color: COLORS.inkSoft }} className="text-xs flex items-center gap-1">
+              <Phone size={11} /> {order.phone}
+            </span>
+          )}
+          {order.method !== "pickup" && (
+            <span style={{ color: COLORS.inkSoft }} className="text-xs flex items-center gap-1">
+              <MapPin size={11} /> บ้านเลขที่ {order.houseNo || "-"}
+            </span>
+          )}
+        </div>
+
+        {/* สถานะการจ่ายเงิน — คนส่งดูว่าต้องเก็บเงินไหม */}
+        <div className="flex items-center gap-1.5 flex-wrap mb-3">
+          <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} />
+        </div>
+
+        {/* รายการอาหาร */}
+        <div className="space-y-1.5 mb-2.5">
+          {order.items.map((i) => (
+            <div key={i.cartId || i.id} className="text-sm">
+              <div className="flex justify-between items-baseline gap-2">
+                <span style={{ color: COLORS.ink }}>{i.name} × {i.qty}</span>
+                <span style={{ color: COLORS.inkSoft }} className="text-xs flex-shrink-0">฿{((i.price || 0) * i.qty).toLocaleString()}</span>
+              </div>
+              {i.addOns && i.addOns.length > 0 && (
+                <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
+                  + {i.addOns.map((a) => a.name).join(", ")}
+                </p>
+              )}
+              {i.note && i.note.trim() && (
+                <p style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-[11px] font-medium rounded-lg px-2 py-1 mt-1 mb-1 flex items-start gap-1">
+                  <Pencil size={10} className="mt-0.5 flex-shrink-0" /> {i.note}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* ยอดรวม + ปุ่มโทร + ปุ่มจัดส่ง */}
+        <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="pt-2.5 mt-1 flex items-end justify-between gap-2">
+          <div className="min-w-0">
+            {order.discount && Number(order.discount.baht) > 0 && (
+              <div className="text-xs mb-0.5">
+                <span style={{ color: COLORS.sage }} className="font-semibold">
+                  ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{order.discount.baht}
+                </span>
+              </div>
+            )}
+            <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {order.phone && (
+              <a
+                href={`tel:${order.phone.replace(/\D/g, "")}`}
+                style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }}
+                className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+              >
+                <Phone size={12} /> โทร
+              </a>
+            )}
+            {order.status === "done" ? (
+              <button
+                onClick={() => onAdvance(order.id)}
+                style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
+              >
+                <Truck size={12} /> กำลังจัดส่ง
+              </button>
+            ) : (
+              <button
+                onClick={() => setConfirmRevertId(order.id)}
+                style={{ background: "#FFFFFF", color: COLORS.sage, border: `1px solid ${COLORS.sage}` }}
+                className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
+              >
+                <Truck size={12} /> จัดส่งเสร็จแล้ว
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
@@ -4461,43 +4907,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">รับที่ร้าน</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({pickups.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">
-            {pickups.map((order) => {
-              const meta = statusMeta[order.status];
-              const total = calcOrderTotal(order);
-              return (
-                <div
-                  key={order.id}
-                  style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-                  className="rounded-2xl p-3.5 flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0">
-                    <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
-                      #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
-                    </p>
-                    <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">รับที่ร้าน · ฿{total}</p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {order.phone && (
-                      <a
-                        href={`tel:${order.phone.replace(/\D/g, "")}`}
-                        style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }}
-                        className="text-xs font-semibold px-3 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
-                      >
-                        <Phone size={12} /> โทร
-                      </a>
-                    )}
-                    <span
-                      style={{ background: meta.bg, color: meta.color }}
-                      className="text-xs font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
-                    >
-                      {meta.label}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <div className="space-y-2.5">{pickups.map(renderCard)}</div>
         </div>
       )}
 
@@ -4508,61 +4918,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">{formatDeliveryDateLabel(dateK)}</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({groupsByDate[dateK].length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">
-            {groupsByDate[dateK].map((order) => {
-              const total = calcOrderTotal(order);
-              return (
-                <div
-                  key={order.id}
-                  style={{ background: order.status === "delivered" ? "#EEF5EA" : "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-                  className="rounded-2xl p-3.5"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <span
-                        style={{ background: COLORS.paper, color: COLORS.caramelDark }}
-                        className="text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0 inline-flex mb-1"
-                      >
-                        <Clock size={11} /> {order.deliveryTime} น.
-                      </span>
-                      <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
-                        #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
-                      </p>
-                      <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">บ้านเลขที่ {order.houseNo || "-"} · ฿{total}</p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {order.phone && (
-                        <a
-                          href={`tel:${order.phone.replace(/\D/g, "")}`}
-                          style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }}
-                          className="text-xs font-semibold px-3 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
-                        >
-                          <Phone size={12} /> โทร
-                        </a>
-                      )}
-                      {order.status === "done" ? (
-                        <button
-                          onClick={() => onAdvance(order.id)}
-                          style={{ background: COLORS.sage, color: "#FFF9F0" }}
-                          className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
-                        >
-                          <Truck size={12} /> กำลังจัดส่ง
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => setConfirmRevertId(order.id)}
-                          style={{ background: "#FFFFFF", color: COLORS.sage, border: `1px solid ${COLORS.sage}` }}
-                          className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
-                        >
-                          <Truck size={12} /> จัดส่งเสร็จแล้ว
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <div className="space-y-2.5">{groupsByDate[dateK].map(renderCard)}</div>
         </div>
       ))}
 
@@ -4572,58 +4928,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
             <span style={{ color: COLORS.inkSoft }} className="text-sm font-bold">ส่งตอนนี้ / ไม่ระบุเวลา</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({unscheduled.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">
-            {unscheduled.map((order) => {
-              const total = calcOrderTotal(order);
-              return (
-                <div
-                  key={order.id}
-                  style={{ background: order.status === "delivered" ? "#EEF5EA" : "#FFFFFF", border: `1px dashed ${COLORS.line}` }}
-                  className="rounded-2xl p-3.5 flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0">
-                    <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
-                      #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
-                    </p>
-                    <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
-                      {order.deliveryNow && (
-                        <span style={{ color: COLORS.sage }} className="font-semibold">ส่งตอนนี้ · </span>
-                      )}
-                      บ้านเลขที่ {order.houseNo || "-"} · ฿{total}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {order.phone && (
-                      <a
-                        href={`tel:${order.phone.replace(/\D/g, "")}`}
-                        style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }}
-                        className="text-xs font-semibold px-3 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
-                      >
-                        <Phone size={12} /> โทร
-                      </a>
-                    )}
-                    {order.status === "done" ? (
-                      <button
-                        onClick={() => onAdvance(order.id)}
-                        style={{ background: COLORS.sage, color: "#FFF9F0" }}
-                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
-                      >
-                        <Truck size={12} /> กำลังจัดส่ง
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmRevertId(order.id)}
-                        style={{ background: "#FFFFFF", color: COLORS.sage, border: `1px solid ${COLORS.sage}` }}
-                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
-                      >
-                        <Truck size={12} /> จัดส่งเสร็จแล้ว
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <div className="space-y-2.5">{unscheduled.map(renderCard)}</div>
         </div>
       )}
 
@@ -4686,12 +4991,14 @@ function StaffPromoView({ promos, updatePromos, menu }) {
   });
 
   const startNew = () => {
+    seedIdCounter(menu, promos); // กันโปรโมชั่นใหม่ได้ id ซ้ำกับตัวเก่า (บั๊ก id ซ้ำข้าม session)
     setEditing("new");
     setConfirmDelete(null);
     setForm({ name: "", type: "discount", active: true, discountMode: "percent", discountAmount: "", minSpend: "", itemIds: [], addOnIds: [], code: "", maxUses: "", perCustomer: false, pickupOnly: true });
   };
 
   const startEdit = (p) => {
+    seedIdCounter(menu, promos); // กัน id ใหม่ที่สร้างตอนแก้ซ่อมไม่ให้ชนกับของเดิม
     setEditing(p.id);
     setConfirmDelete(null);
     setForm({
@@ -5459,6 +5766,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
   ).length;
 
   const startNew = () => {
+    seedStockCounter(stockItems); // กันวัตถุดิบใหม่ได้ id ซ้ำกับของเดิม (บั๊ก id ซ้ำข้าม session)
     setEditing("new");
     setForm({ name: "", unit: "ชิ้น", qty: "", minQty: "" });
   };
@@ -5707,6 +6015,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const openRound = () => {
     const cash = Number(roundOpenForm.cash);
     if (!roundOpenForm.cash || Number.isNaN(cash) || cash < 0) return;
+    seedSalesRoundCounters(salesRound); // กันรอบใหม่ได้ id ซ้ำกับรอบเก่าที่ปิดไปแล้ว (บั๊ก id ซ้ำข้าม session)
     updateSalesRound((prev) => ({
       active: { id: nextSalesRoundId(), openedAt: Date.now(), openingCash: cash, note: roundOpenForm.note.trim(), entries: [] },
       history: prev.history || [],
@@ -5717,6 +6026,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const addRoundEntry = () => {
     const amount = Number(roundEntryForm.amount);
     if (!roundEntryForm.amount || Number.isNaN(amount) || amount <= 0 || !activeRound) return;
+    seedSalesRoundCounters(salesRound); // กันรายการเบิก/ฝากใหม่ได้ id ซ้ำกับรายการเดิม (บั๊ก id ซ้ำข้าม session)
     updateSalesRound((prev) => ({
       ...prev,
       active: {
@@ -5835,6 +6145,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     if (!expForm.title.trim() || !expForm.amount) return;
     const amount = Number(expForm.amount);
     if (Number.isNaN(amount) || amount <= 0) return;
+    seedExpenseCounter(expenses); // กันรายจ่ายใหม่ได้ id ซ้ำกับของเดิม (บั๊ก id ซ้ำข้าม session)
     const date = expForm.date || todayKey();
     const ts = new Date(`${date}T00:00:00`).getTime();
     updateExpenses((prev) => [
@@ -6783,6 +7094,8 @@ function App() {
   // (โหมดออฟไลน์ — ไม่ทำอะไรตรงนี้ ออร์เดอร์อยู่แค่ใน state ของเครื่องนี้เครื่องเดียว)
   // เก็บ id ออร์เดอร์ล่าสุดที่ sync มาไว้เทียบรอบถัดไป (ref เพราะไม่ต้องการ re-render ตอนนี้เปลี่ยน)
   const prevOrderIdsRef = useRef(null);
+  // เลขออร์เดอร์ล่าสุดที่เครื่องนี้สร้าง — กันเลขซ้ำกับออร์เดอร์ก่อนหน้าของเครื่องเดียวกัน (ถ้าซ้ำจริงจะ +1)
+  const lastOrderNoRef = useRef(null);
 
   useEffect(() => {
     if (!FIREBASE_SYNC_ENABLED) return;
@@ -6805,6 +7118,9 @@ function App() {
               .map((o) => o.id);
             if (newlyArrivedIds.length > 0 && staffUnlocked) {
               playNewOrderAlert();
+              // พูดแจ้งเตือนเป็นประโยคด้วย — บอกจำนวนออเดอร์ใหม่ + เลขออเดอร์ (ถ้ามีออเดอร์เดียว)
+              const firstNew = newOrders.find((o) => newlyArrivedIds.includes(o.id));
+              speakNewOrderAlert(newlyArrivedIds.length, firstNew && firstNew.orderNo);
               setRecentOrderIds((prev) => new Set([...prev, ...newlyArrivedIds]));
               setTimeout(() => {
                 setRecentOrderIds((prev) => {
@@ -6840,9 +7156,11 @@ function App() {
         (doc) => {
           if (doc.exists && Array.isArray(doc.data().items)) {
             setMenu(doc.data().items);
+            seedIdCounter(doc.data().items); // กันเมนูใหม่ที่พนักงานสร้างได้ id ซ้ำกับของเดิม (บั๊ก id ซ้ำข้าม session)
           } else {
             // เอกสารยังไม่เคยถูกสร้าง (ร้านเพิ่งเชื่อม Firebase ครั้งแรก) — เอาเมนูตั้งต้นไปตั้งเป็นค่าเริ่มต้นให้
             setMenu(initialMenu);
+            seedIdCounter(initialMenu);
             db.collection("config").doc("menu").set({ items: initialMenu }).catch((err) => {
               console.error("ตั้งค่าเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
             });
@@ -6873,8 +7191,20 @@ function App() {
             // เพราะเครื่องลูกค้าต้องอัปเดตได้เฉพาะฟิลด์นี้ (rules กันไว้) ส่วน items ฝั่งพนักงานแก้เท่านั้น
             const usageMap =
               doc.data().usage && typeof doc.data().usage === "object" ? doc.data().usage : {};
+            // ซ่อม id ซ้ำ (บั๊กเดิม: id เริ่มนับ 100 ใหม่ทุก session → โปรโมชั่นที่สร้างข้าม session
+            // ได้ id ชนกัน พอ id ซ้ำ แก้/ลบ/เปิดปิดตัวเดียวจะกระทบทุกตัวที่ id ตรงกัน)
+            // ถ้าพบ id ซ้ำ/ไม่มี id จะให้ id ใหม่กับตัวที่ซ้ำ แล้วเขียนกลับเพื่อซ่อมข้อมูลใน Firestore
+            // (เครื่องที่ไม่มีสิทธิ์เขียนจะเงียบเฉย ๆ — ข้อมูลในเครื่องถูกซ่อมแล้ว และพนักงานที่
+            // บันทึกครั้งถัดไปจะเขียนเวอร์ชันที่ถูกต้องขึ้นไปให้ทุกเครื่อง)
+            const { items: uniqueItems, changed } = ensureUniquePromoIds(doc.data().items);
+            if (changed) {
+              db.collection("config")
+                .doc("promotions")
+                .set({ items: uniqueItems }, { merge: true })
+                .catch(() => {}); // กันลูกค้าที่ไม่มีสิทธิ์เขียนสแปม console
+            }
             setPromos(
-              doc.data().items.map((p) => ({
+              uniqueItems.map((p) => ({
                 ...p,
                 _usage:
                   usageMap[p.id] && typeof usageMap[p.id] === "object" ? usageMap[p.id] : null,
@@ -6904,7 +7234,17 @@ function App() {
       .onSnapshot(
         (doc) => {
           if (doc.exists && Array.isArray(doc.data().items)) {
-            setStockItems(doc.data().items);
+            // ซ่อม id ซ้ำ (บั๊กเดิม: id เริ่มนับ 100 ใหม่ทุก session → รายการที่สร้างข้าม session
+            // ได้ id ชนกัน พอ id ซ้ำ แก้/ลบ/นับตัวเดียวจะกระทบทุกตัวที่ id ตรงกัน)
+            // ถ้าพบ id ซ้ำ/ไม่มี id จะให้ id ใหม่กับตัวที่ซ้ำ แล้วเขียนกลับเพื่อซ่อมข้อมูลใน Firestore
+            const { items: uniqueItems, changed } = ensureUniqueStockIds(doc.data().items);
+            if (changed) {
+              db.collection("config")
+                .doc("stock")
+                .set({ items: uniqueItems }, { merge: true })
+                .catch(() => {}); // เครื่องที่ไม่มีสิทธิ์เขียนเงียบ ๆ — ไม่สแปม console
+            }
+            setStockItems(uniqueItems);
           } else {
             setStockItems([]);
           }
@@ -6925,7 +7265,16 @@ function App() {
       .onSnapshot(
         (doc) => {
           if (doc.exists && Array.isArray(doc.data().items)) {
-            setExpenses(doc.data().items);
+            // ซ่อม id ซ้ำ (บั๊กเดิม: id เริ่มนับ 100 ใหม่ทุก session → รายจ่ายที่สร้างข้าม session
+            // ได้ id ชนกัน พอ id ซ้ำ ลบตัวเดียวจะโดนลบหมด) — เขียนกลับเพื่อซ่อมข้อมูลใน Firestore
+            const { items: uniqueItems, changed } = ensureUniqueExpenseIds(doc.data().items);
+            if (changed) {
+              db.collection("config")
+                .doc("expenses")
+                .set({ items: uniqueItems }, { merge: true })
+                .catch(() => {}); // เครื่องที่ไม่มีสิทธิ์เขียนเงียบ ๆ — ไม่สแปม console
+            }
+            setExpenses(uniqueItems);
           } else {
             setExpenses([]);
           }
@@ -6947,10 +7296,20 @@ function App() {
         (doc) => {
           if (doc.exists && doc.data()) {
             const d = doc.data();
-            setSalesRound({
+            // ซ่อม id ซ้ำของรอบการขาย + รายการเบิก/ฝาก (บั๊กเดิม: id เริ่มนับ 100 ใหม่ทุก session
+            // → รอบที่เปิดข้าม session ได้ id ชนกัน พอจดเบิก/ฝากหรือลบรายการ กระทบรายการที่ id ตรงกัน)
+            // ถ้าพบ id ซ้ำ/ไม่มี id จะให้ id ใหม่ แล้วเขียนกลับเพื่อซ่อมข้อมูลใน Firestore
+            const fixed = ensureUniqueSalesRoundIds({
               active: d.active && typeof d.active === "object" ? d.active : null,
               history: Array.isArray(d.history) ? d.history : [],
             });
+            if (fixed.changed) {
+              db.collection("config")
+                .doc("salesRound")
+                .set({ active: fixed.active, history: fixed.history }, { merge: true })
+                .catch(() => {}); // เครื่องที่ไม่มีสิทธิ์เขียนเงียบ ๆ — ไม่สแปม console
+            }
+            setSalesRound({ active: fixed.active, history: fixed.history });
           } else {
             setSalesRound({ active: null, history: [] });
           }
@@ -7237,10 +7596,13 @@ function App() {
     });
   };
 
-  const placeOrder = async (paymentMethod, slip, customer, discount) => {
-    // เลขออร์เดอร์แบบง่าย ๆ จากเลขท้ายเวลา — เหมาะกับร้านเล็กที่ออร์เดอร์ไม่ถี่มาก
-    // ถ้าจะการันตีไม่ซ้ำ 100% ในระบบจริง ควรทำ counter แยกด้วย Firestore transaction
-    const orderNo = Number(String(Date.now()).slice(-4));
+  const placeOrder = async (paymentMethod, slip, customer, discount, cod) => {
+    // เลขออร์เดอร์ — ใช้เลขท้าย 6 หลักของเวลาปัจจุบัน (เดิมใช้ 4 หลักซึ่งวนซ้ำทุก 10 วินาที
+    // ทำให้ออร์เดอร์ที่มาใกล้กันได้เลขซ้ำ — 6 หลักวนซ้ำทุก ~16.6 นาที โอกาสชนกันแทบไม่มี
+    // สำหรับร้านเล็ก) บวกกันเลขซ้ำกับออร์เดอร์ก่อนหน้าของเครื่องนี้ด้วย (ถ้าซ้ำจริงจะ +1)
+    const base = Number(String(Date.now()).slice(-6));
+    const orderNo = base === lastOrderNoRef.current ? (base + 1) % 1000000 : base;
+    lastOrderNoRef.current = orderNo;
     // นับการใช้โค้ดส่วนลดเมื่อสั่งสำเร็จ — เพิ่มจำนวนครั้งที่ใช้ + จดเครื่องที่ใช้ (กันใช้ซ้ำถ้าเป็นแบบ 1 ครั้ง/คน)
     // เขียนไปที่ฟิลด์ usage ของ config/promotions ด้วย FieldValue increment/arrayUnion (อัปเดตแบบอะตอมมิก)
     // ทำไมไม่เขียนทับ items ทั้งก้อน: เครื่องลูกค้าไม่มีสิทธิ์เขียน config (rules กันไว้) —
@@ -7286,6 +7648,10 @@ function App() {
       paymentMethod,
       slip: slip || null,
       discount: discount || null, // { code, percent, baht } — ส่วนลดจากโค้ด (ถ้ามี)
+      // สถานะการจ่ายเงิน — จ่ายแล้วตอนสั่ง (โอน + แนบสลิป) หรือยังไม่จ่าย (เงินสด / เก็บปลายทาง)
+      // ใช้กับป้าย "จ่ายแล้ว / ยังไม่จ่าย" ในการ์ดออร์เดอร์ฝั่งพนักงาน และให้คนส่งรู้ว่าต้องเก็บเงินไหม
+      collectOnDelivery: !!cod || paymentMethod === "cash",
+      paid: !!slip && paymentMethod !== "cash" && !cod,
     };
     if (FIREBASE_SYNC_ENABLED) {
       try {
@@ -7370,6 +7736,18 @@ function App() {
       }
     } else {
       setOrders((prev) => prev.filter((o) => o.id !== id));
+    }
+  };
+
+  // เก็บเงินแล้ว (คนส่งเก็บเงินสด/เก็บปลายทางจากลูกค้าแล้ว) — จดสถานะว่าออร์เดอร์นี้จ่ายแล้ว
+  // อัปเดต state ท้องถิ่นทันที (optimistic) แล้วค่อยซิงก์ Firestore ด้านหลัง
+  const markOrderPaid = (id) => {
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: true, collectOnDelivery: false } : o)));
+    if (FIREBASE_SYNC_ENABLED) {
+      db.collection("orders")
+        .doc(id)
+        .update({ paid: true, collectOnDelivery: false })
+        .catch((err) => console.error("บันทึกสถานะจ่ายเงินไม่สำเร็จ:", err));
     }
   };
 
@@ -7670,9 +8048,12 @@ function App() {
             onCancel={cancelOrder}
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
+            onMarkPaid={markOrderPaid}
           />
         )}
-        {role === "staff-delivery" && <StaffDeliveryView orders={orders} onAdvance={advanceOrder} />}
+        {role === "staff-delivery" && (
+          <StaffDeliveryView orders={orders} onAdvance={advanceOrder} onMarkPaid={markOrderPaid} />
+        )}
         {role === "staff-menu" && (
           <MenuManagerView
             menu={menu}
