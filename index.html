@@ -652,18 +652,51 @@ function Chip({ children, tone = "caramel" }) {
 // ป้ายสถานะการจ่ายเงิน — ใช้ทั้งการ์ดออร์เดอร์เข้าร้านและการ์ดคิวจัดส่ง
 // จ่ายแล้ว (โอน+แนบสลิป) = เขียว | ยังไม่จ่าย = แดง พร้อมยอดที่ต้องเก็บ + ปุ่ม "เก็บเงินแล้ว"
 // (คนส่งเก็บเงินสด/เก็บปลายทางจากลูกค้าแล้วค่อยกด — แล้วออร์เดอร์จะกลายเป็นจ่ายแล้ว)
-function PaymentStatusBadge({ order, onMarkPaid }) {
+function PaymentStatusBadge({ order, onMarkPaid, onUnmarkPaid }) {
+  const [confirmRevert, setConfirmRevert] = useState(false);
   if (!order || order.status === "cancelled") return null;
   const paid = orderIsPaid(order);
   const total = calcOrderTotal(order);
   if (paid) {
+    // จ่ายแล้ว — กดอีกครั้งเพื่อย้อนกลับเป็น "ยังไม่จ่าย" มีป็อปอัพยืนยันกันกดพลาด (เหมือนปุ่ม "จัดส่งเสร็จแล้ว")
     return (
-      <span
-        style={{ background: COLORS.sageSoft, color: COLORS.sage }}
-        className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 whitespace-nowrap"
-      >
-        <Check size={11} /> จ่ายแล้ว
-      </span>
+      <>
+        <button
+          onClick={() => setConfirmRevert(true)}
+          style={{ border: `1px solid ${COLORS.sage}`, color: COLORS.sage, background: "#FFFFFF" }}
+          className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 active:scale-95 transition-transform"
+        >
+          <Check size={11} /> จ่ายแล้ว
+        </button>
+        {confirmRevert && onUnmarkPaid && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center px-8">
+            <div onClick={() => setConfirmRevert(false)} className="absolute inset-0 bg-black/30" />
+            <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
+              <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ย้อนกลับเป็นยังไม่จ่าย?</p>
+              <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+                ออร์เดอร์ #{order.orderNo} จะกลับเป็น "ยังไม่จ่าย" และต้องกด "เก็บเงินแล้ว" ใหม่อีกครั้ง —
+                ยืนยันว่าจะย้อนกลับไหม?
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setConfirmRevert(false)}
+                  style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                  className="flex-1 text-xs font-semibold py-2.5 rounded-xl bg-white"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  onClick={() => { setConfirmRevert(false); onUnmarkPaid(order.id); }}
+                  style={{ background: "#C0533F", color: "#FFF" }}
+                  className="flex-1 text-xs font-semibold py-2.5 rounded-xl"
+                >
+                  ย้อนกลับ
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
   return (
@@ -4055,7 +4088,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onMarkPaid }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
@@ -4221,7 +4254,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     <Truck size={11} /> ส่งตอนนี้ (เร็วที่สุด)
                   </Chip>
                 ) : null}
-                <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} />
+                <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} onUnmarkPaid={onUnmarkPaid} />
                 {order.slip?.dataUrl && (
                   <span style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1">
                     <QrCode size={11} /> แนบสลิปแล้ว
@@ -4705,7 +4738,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 // ================= STAFF DELIVERY VIEW (จัดเรียงตามวัน-เวลาจัดส่ง) =================
 // รวมออร์เดอร์ที่ยังไม่ยกเลิกทั้งหมด จัดกลุ่มตามวันที่จัดส่ง แล้วเรียงเวลาไล่จากเช้าไปเย็นในแต่ละวัน
 // ให้พนักงานเห็นภาพรวมว่าแต่ละวันต้องจัดส่งกี่ออร์เดอร์ เวลาไหนบ้าง วางแผนออกรอบส่งได้ง่ายขึ้น
-function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
+function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
   const [confirmRevertId, setConfirmRevertId] = useState(null); // order id ที่รอป็อปอัพยืนยันย้อนกลับการจัดส่ง
   const statusMeta = {
     new: { label: "ออร์เดอร์ใหม่", color: COLORS.caramel, bg: COLORS.peachSoft, action: null },
@@ -4795,7 +4828,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid }) {
 
         {/* สถานะการจ่ายเงิน — คนส่งดูว่าต้องเก็บเงินไหม */}
         <div className="flex items-center gap-1.5 flex-wrap mb-3">
-          <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} />
+          <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} onUnmarkPaid={onUnmarkPaid} />
         </div>
 
         {/* รายการอาหาร */}
@@ -5979,10 +6012,20 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const roundHistory = (salesRound && salesRound.history) || [];
 
   // ยอดขายเงินสดในรอบนี้ (ออร์เดอร์เงินสดที่ไม่ถูกยกเลิก ตั้งแต่เปิดรอบ) — ใช้ตัวเลขจริง ไม่ผูกกับช่วงเวลา
+  // นับเฉพาะออร์เดอร์ที่เก็บเงินแล้ว (เงินเข้าโต๊ะจริง) — ออร์เดอร์เงินสดที่ยังไม่จ่าย (คนส่งยังไปเก็บ)
+  // จะไม่นับในยอดคาดหวัง จนกว่าจะกด "เก็บเงินแล้ว" (แยกดูได้จากบรรทัด "ยังไม่เก็บ")
   const cashSalesInRound = useMemo(() => {
     if (!activeRound) return 0;
     return orders
-      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt)
+      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && orderIsPaid(o))
+      .reduce((s, o) => s + calcOrderTotal(o), 0);
+  }, [orders, activeRound]);
+
+  // เงินสดจากออร์เดอร์ที่ยังไม่ได้เก็บ (คนส่งไปเก็บแล้วยังไม่กลับ / ยังไม่กด "เก็บเงินแล้ว")
+  const unpaidCashInRound = useMemo(() => {
+    if (!activeRound) return 0;
+    return orders
+      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && !orderIsPaid(o))
       .reduce((s, o) => s + calcOrderTotal(o), 0);
   }, [orders, activeRound]);
 
@@ -6089,38 +6132,58 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const totalExpense = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const netProfit = grossProfit - totalExpense;
 
-  // สรุปแยกตามวิธีชำระเงิน
+  // สรุปแยกตามวิธีชำระเงิน + แยก จ่ายแล้ว / ยังไม่จ่าย (ออร์เดอร์เงินสด/เก็บปลายทางที่ยังไม่ได้เก็บเงิน)
   const payStats = useMemo(() => {
     const map = {
-      cash: { label: "เงินสด", amount: 0, count: 0 },
-      promptpay: { label: "โอน/พร้อมเพย์", amount: 0, count: 0 },
-      card: { label: "บัตร", amount: 0, count: 0 },
+      cash: { label: "เงินสด", paid: 0, unpaid: 0, count: 0 },
+      promptpay: { label: "โอน/พร้อมเพย์", paid: 0, unpaid: 0, count: 0 },
+      card: { label: "บัตร", paid: 0, unpaid: 0, count: 0 },
     };
     sold.forEach((o) => {
       const key = o.paymentMethod === "cash" ? "cash" : o.paymentMethod === "card" ? "card" : "promptpay";
-      map[key].amount += calcOrderTotal(o);
+      const amount = calcOrderTotal(o);
       map[key].count += 1;
+      if (orderIsPaid(o)) map[key].paid += amount;
+      else map[key].unpaid += amount;
     });
     return map;
   }, [sold]);
 
+  // ยอดที่เก็บเงินแล้ว vs ยังไม่ได้เก็บ — ยอดขายรวม (totalRevenue) ยังนับทุกออร์เดอร์ที่ขายได้
+  // (ออร์เดอร์ที่ยังไม่จ่ายก็ถือว่าขายได้แล้ว แต่เงินยังไม่ได้เข้าร้าน)
+  const paidRevenue = sold.reduce((s, o) => s + (orderIsPaid(o) ? calcOrderTotal(o) : 0), 0);
+  const unpaidRevenue = totalRevenue - paidRevenue;
+
   // กำไร/ขาดทุนต่อเมนู (เมนูที่มีการขายในช่วง) — ต้นทุนรวมท็อปปิ้ง/แอดออนด้วย (ใช้ costOfItem)
+  // บวกนับตัวเลือกเสริมที่ลูกค้าเลือก (เช่น เพิ่มไข่มุกกี่ครั้ง) — จากหน้า "ยอดขาย" เดิมที่รวบมา
   const menuProfit = useMemo(() => {
     const map = new Map();
     sold.forEach((o) =>
       (o.items || []).forEach((it) => {
         const key = it.menuId || it.name;
-        if (!map.has(key)) map.set(key, { name: it.name, qty: 0, revenue: 0, cost: 0, hasCost: false });
+        if (!map.has(key)) map.set(key, { key, name: it.name, qty: 0, revenue: 0, cost: 0, hasCost: false, addOnCounts: new Map() });
         const e = map.get(key);
         e.qty += it.qty;
         e.revenue += it.price * it.qty;
         const c = costOfItem(it);
         e.cost += c;
         if (c > 0) e.hasCost = true;
+        (it.addOns || []).forEach((a) => e.addOnCounts.set(a.name, (e.addOnCounts.get(a.name) || 0) + it.qty));
       })
     );
     return [...map.values()].sort((a, b) => b.revenue - a.revenue);
   }, [sold]);
+
+  // ---- ข้อมูลจากหน้า "ยอดขาย" เดิมที่รวบมาไว้ในแท็บบัญชีเดียว ----
+  const totalOrders = sold.length; // จำนวนออร์เดอร์ที่ขายได้
+  const totalItemsSold = sold.reduce((s, o) => s + (o.items || []).reduce((s2, it) => s2 + (Number(it.qty) || 0), 0), 0);
+  // รายการที่ยกเลิกในช่วงที่เลือก — แยกไว้อีกส่วน เพื่อดูสาเหตุการยกเลิกย้อนหลัง + ส่งออก Excel
+  const cancelledOrders = useMemo(() => {
+    const list = rangeStart === null ? orders : orders.filter((o) => o.createdAt >= rangeStart);
+    return list.filter((o) => o.status === "cancelled").sort((a, b) => b.createdAt - a.createdAt);
+  }, [orders, rangeStart]);
+  const cancelledInRange = cancelledOrders.length;
+  const [expandedKey, setExpandedKey] = useState(null); // เมนูที่กดขยายดูตัวเลือกเสริม (ท็อปปิ้งยอดนิยม)
 
   const addExpense = () => {
     if (!expForm.title.trim() || !expForm.amount) return;
@@ -6159,8 +6222,12 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     rows.push(["รายจ่ายรวม (บาท)", totalExpense]);
     rows.push(["กำไรสุทธิ (บาท)", netProfit]);
     rows.push([]);
-    rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
-    Object.values(payStats).forEach((p) => rows.push([p.label, p.count, p.amount]));
+    rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "จ่ายแล้ว (บาท)", "ยังไม่จ่าย (บาท)", "ยอดรวม (บาท)"]);
+    Object.values(payStats).forEach((p) => rows.push([p.label, p.count, p.paid, p.unpaid, p.paid + p.unpaid]));
+    rows.push([]);
+    rows.push(["สถานะการจ่ายเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
+    rows.push(["จ่ายแล้ว", sold.filter((o) => orderIsPaid(o)).length, paidRevenue]);
+    rows.push(["ยังไม่จ่าย", sold.filter((o) => !orderIsPaid(o)).length, unpaidRevenue]);
     rows.push([]);
     rows.push(["กำไรต่อเมนู", "ชิ้นที่ขาย", "รายได้ (บาท)", "ต้นทุน (บาท)", "กำไร (บาท)"]);
     menuProfit.forEach((m) => rows.push([m.name, m.qty, m.revenue, m.cost, m.revenue - m.cost]));
@@ -6179,6 +6246,72 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // ดาวน์โหลดไฟล์ CSV (เปิดใน Excel ได้ รองรับภาษาไทย) — ใส่ BOM UTF-8 กันภาษาไทยเพี้ยน
+  const downloadCsv = (filename, rows) => {
+    const BOM = "\uFEFF";
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const csv = BOM + rows.map((r) => r.map(esc).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // รวมรายการสินค้าของออร์เดอร์เป็นข้อความเดียว (ชื่อ xจำนวน + ท็อปปิ้ง) สำหรับลงไฟล์
+  const formatItems = (o) =>
+    (o.items || [])
+      .map((i) => {
+        const addOns = (i.addOns || []).map((a) => `+${a.name}`).join(" ");
+        return `${i.name} x${i.qty}${addOns ? " (" + addOns + ")" : ""}`;
+      })
+      .join(" | ");
+
+  // ส่งออกออร์เดอร์ทั้งหมด (จากหน้า "ยอดขาย" เดิม) — รายละเอียดทีละออร์เดอร์ + สถานะจ่ายเงิน
+  const exportOrders = () => {
+    const rows = [
+      ["เลขออร์เดอร์", "วันที่สั่ง", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "ส่วนลด (บาท)", "วิธีชำระเงิน", "จ่ายเงิน", "สถานะ"],
+      ...sold.map((o) => [
+        o.orderNo,
+        new Date(o.createdAt).toLocaleString("th-TH"),
+        o.customerName || "",
+        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
+        formatItems(o),
+        calcOrderTotal(o),
+        (o.discount && o.discount.baht) || 0,
+        o.paymentMethod === "cash" ? "เงินสด" : o.paymentMethod === "promptpay" ? "พร้อมเพย์" : "บัตร",
+        orderIsPaid(o) ? "จ่ายแล้ว" : "ยังไม่จ่าย",
+        o.status,
+      ]),
+    ];
+    downloadCsv(`ออร์เดอร์-${rangeLabels[range]}.csv`, rows);
+  };
+
+  // ส่งออกออร์เดอร์ที่ยกเลิก — พร้อมสาเหตุ (จากหน้า "ยอดขาย" เดิม)
+  const exportCancelled = () => {
+    const rows = [
+      ["เลขออร์เดอร์", "วันที่สั่ง", "วันที่ยกเลิก", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "สาเหตุที่ยกเลิก"],
+      ...cancelledOrders.map((o) => [
+        o.orderNo,
+        new Date(o.createdAt).toLocaleString("th-TH"),
+        o.cancelledAt ? new Date(o.cancelledAt).toLocaleString("th-TH") : "",
+        o.customerName || "",
+        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
+        formatItems(o),
+        calcOrderTotal(o),
+        o.cancelReason || "",
+      ]),
+    ];
+    downloadCsv(`ที่ยกเลิก-${rangeLabels[range]}.csv`, rows);
   };
 
   return (
@@ -6208,19 +6341,45 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         ))}
       </div>
 
-      {/* ส่งออกรายงานบัญชี (Excel) */}
-      <button
-        onClick={exportAccounting}
-        disabled={sold.length === 0 && filteredExpenses.length === 0}
-        style={{
-          background: sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3",
-          color: sold.length > 0 || filteredExpenses.length > 0 ? "#FFF9F0" : "#A99A87",
-          border: `1px solid ${sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3"}`,
-        }}
-        className="w-full rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 mb-4 disabled:cursor-not-allowed"
-      >
-        <DownloadIcon size={13} /> ส่งออกรายงานบัญชี (Excel) — สรุป + กำไรต่อเมนู + รายจ่าย
-      </button>
+      {/* ส่งออกไฟล์ Excel — รายงานบัญชี + ออร์เดอร์ + ที่ยกเลิก */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={exportAccounting}
+          disabled={sold.length === 0 && filteredExpenses.length === 0}
+          style={{
+            background: sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3",
+            color: sold.length > 0 || filteredExpenses.length > 0 ? "#FFF9F0" : "#A99A87",
+            border: `1px solid ${sold.length > 0 || filteredExpenses.length > 0 ? COLORS.sage : "#E3DDD3"}`,
+          }}
+          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+        >
+          <DownloadIcon size={13} /> รายงานบัญชี (Excel)
+        </button>
+        <button
+          onClick={exportOrders}
+          disabled={sold.length === 0}
+          style={{
+            background: sold.length > 0 ? COLORS.caramel : "#E3DDD3",
+            color: sold.length > 0 ? "#FFF9F0" : "#A99A87",
+            border: `1px solid ${sold.length > 0 ? COLORS.caramel : "#E3DDD3"}`,
+          }}
+          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+        >
+          <DownloadIcon size={13} /> ออร์เดอร์ (Excel)
+        </button>
+        <button
+          onClick={exportCancelled}
+          disabled={cancelledOrders.length === 0}
+          style={{
+            background: cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3",
+            color: cancelledOrders.length > 0 ? "#FFF9F0" : "#A99A87",
+            border: `1px solid ${cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3"}`,
+          }}
+          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
+        >
+          <DownloadIcon size={13} /> ที่ยกเลิก (Excel)
+        </button>
+      </div>
 
       {/* รอบการขายรายวัน — เปิดรอบ/จดเบิกฝาก/ปิดรอบ สรุปเงินสดตรง-เกิน-ขาด */}
       <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-4">
@@ -6282,9 +6441,15 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                 <span style={{ color: COLORS.ink }} className="font-semibold">฿{Number(activeRound.openingCash) || 0}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span style={{ color: COLORS.inkSoft }}>ยอดขายเงินสดในรอบ</span>
+                <span style={{ color: COLORS.inkSoft }}>ยอดขายเงินสดในรอบ (เก็บแล้ว)</span>
                 <span style={{ color: COLORS.sage }} className="font-semibold">+฿{cashSalesInRound}</span>
               </div>
+              {unpaidCashInRound > 0 && (
+                <div className="flex items-center justify-between text-xs">
+                  <span style={{ color: COLORS.inkSoft }}>ออร์เดอร์เงินสดที่ยังไม่เก็บ</span>
+                  <span style={{ color: "#C0533F" }} className="font-semibold">-฿{unpaidCashInRound}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs">
                 <span style={{ color: COLORS.inkSoft }}>เงินที่ควรมีตอนนี้</span>
                 <span style={{ color: COLORS.ink }} className="font-bold">฿{roundExpected(activeRound.entries)}</span>
@@ -6412,6 +6577,11 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ยอดขาย (หลังหักส่วนลด)</p>
           <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
+          <p className="text-[10px] mt-1 leading-relaxed">
+            <span style={{ color: COLORS.sage }} className="font-semibold">จ่ายแล้ว ฿{paidRevenue.toLocaleString()}</span>
+            {" · "}
+            <span style={{ color: "#C0533F" }} className="font-semibold">ยังไม่จ่าย ฿{unpaidRevenue.toLocaleString()}</span>
+          </p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ต้นทุนวัตถุดิบ (ขายแล้ว)</p>
@@ -6438,13 +6608,34 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         <span className="text-lg font-bold">฿{netProfit.toLocaleString()}</span>
       </div>
 
+      {/* จำนวนออร์เดอร์ / ชิ้นที่ขาย / ออร์เดอร์ที่ยกเลิก (จากหน้า "ยอดขาย" เดิมที่รวบมา) */}
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalOrders}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ออร์เดอร์</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalItemsSold}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ชิ้นที่ขาย</p>
+        </div>
+        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
+          <p style={{ color: cancelledInRange > 0 ? "#C0533F" : COLORS.caramelDark }} className="text-lg font-bold">{cancelledInRange}</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ออร์เดอร์ที่ยกเลิก</p>
+        </div>
+      </div>
+
       {/* สรุปแยกวิธีชำระเงิน */}
       <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">สรุปแยกวิธีชำระเงิน</p>
       <div className="grid grid-cols-3 gap-2 mb-5">
         {Object.values(payStats).map((p) => (
           <div key={p.label} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{p.amount.toLocaleString()}</p>
+            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{(p.paid + p.unpaid).toLocaleString()}</p>
             <p style={{ color: COLORS.inkSoft }} className="text-[11px]">{p.label} · {p.count} ออเดอร์</p>
+            <p className="text-[10px] mt-1 leading-relaxed">
+              <span style={{ color: COLORS.sage }} className="font-semibold">จ่ายแล้ว ฿{p.paid.toLocaleString()}</span>
+              <br />
+              <span style={{ color: "#C0533F" }} className="font-semibold">ยังไม่จ่าย ฿{p.unpaid.toLocaleString()}</span>
+            </p>
           </div>
         ))}
       </div>
@@ -6460,6 +6651,8 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         <div className="space-y-2 mb-5">
           {menuProfit.map((m) => {
             const profit = m.revenue - m.cost;
+            const isOpen = expandedKey === m.key;
+            const addOnList = [...m.addOnCounts.entries()].sort((a, b) => b[1] - a[1]);
             return (
               <div key={m.name} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
                 <div className="flex items-center justify-between gap-2 mb-1">
@@ -6479,6 +6672,23 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                     <span>· ยังไม่ตั้งต้นทุน (ใส่ที่หน้าจัดการเมนู)</span>
                   )}
                 </div>
+                {addOnList.length > 0 && (
+                  <button onClick={() => setExpandedKey(isOpen ? null : m.key)} className="w-full text-left mt-1.5">
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
+                      {isOpen ? "ซ่อนรายละเอียดตัวเลือกเสริม ▲" : "ดูรายละเอียดตัวเลือกเสริม (ท็อปปิ้งยอดนิยม) ▼"}
+                    </p>
+                  </button>
+                )}
+                {isOpen && addOnList.length > 0 && (
+                  <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="mt-2 pt-2 space-y-1.5">
+                    {addOnList.map(([name, count]) => (
+                      <div key={name} className="flex items-center justify-between text-xs">
+                        <span style={{ color: COLORS.inkSoft }}>{name}</span>
+                        <span style={{ color: COLORS.ink }} className="font-semibold">{count} ครั้ง</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -6562,287 +6772,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         </div>
       )}
 
-      {/* ยืนยันลบรายจ่าย */}
-      {confirmDeleteExpense && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
-          <div onClick={() => setConfirmDeleteExpense(null)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
-            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-4">ลบรายจ่ายรายการนี้?</p>
-            <div className="flex gap-2">
-              <button onClick={() => setConfirmDeleteExpense(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
-                ยกเลิก
-              </button>
-              <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
-                ลบ
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StaffDashboardView({ orders }) {
-  const [range, setRange] = useState("today"); // today | 7d | 30d | all
-  const [expandedKey, setExpandedKey] = useState(null);
-
-  const rangeStart = useMemo(() => {
-    const now = new Date();
-    if (range === "all") return null;
-    if (range === "today") {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      return d.getTime();
-    }
-    const days = range === "7d" ? 7 : 30;
-    return now.getTime() - days * 24 * 60 * 60 * 1000;
-  }, [range]);
-
-  const filteredOrders = useMemo(() => {
-    if (rangeStart === null) return orders;
-    return orders.filter((o) => o.createdAt >= rangeStart);
-  }, [orders, rangeStart]);
-
-  // ยอดขายนับเฉพาะออร์เดอร์ที่ไม่ถูกยกเลิก — ออร์เดอร์ที่ลูกค้ายกเลิกไม่ถือเป็นยอดขายจริง
-  const soldOrders = useMemo(
-    () => filteredOrders.filter((o) => o.status !== "cancelled"),
-    [filteredOrders]
-  );
-  const cancelledInRange = filteredOrders.length - soldOrders.length;
-  // รายการที่ยกเลิกในช่วงที่เลือก — แยกไว้อีกส่วน เพื่อเก็บสาเหตุการยกเลิกทีหลัง
-  const cancelledOrders = useMemo(
-    () => filteredOrders.filter((o) => o.status === "cancelled").sort((a, b) => b.createdAt - a.createdAt),
-    [filteredOrders]
-  );
-
-  // รวมยอดต่อเมนู: จำนวนที่ขาย, ยอดขายรวม (รวมตัวเลือกเสริมแล้ว), และรายละเอียด
-  // ตัวเลือกเสริมที่ลูกค้าเลือก (เช่น แยกน้ำแข็ง กี่ครั้ง, เพิ่มไข่มุก กี่ครั้ง)
-  const menuStats = useMemo(() => {
-    const map = new Map(); // key: menuId||name -> { name, qty, revenue, addOnCounts: Map(name -> qty) }
-    for (const order of soldOrders) {
-      for (const item of order.items || []) {
-        const key = item.menuId || item.name;
-        if (!map.has(key)) {
-          map.set(key, { key, name: item.name, qty: 0, revenue: 0, addOnCounts: new Map() });
-        }
-        const entry = map.get(key);
-        entry.qty += item.qty;
-        entry.revenue += item.price * item.qty;
-        for (const addOn of item.addOns || []) {
-          entry.addOnCounts.set(addOn.name, (entry.addOnCounts.get(addOn.name) || 0) + item.qty);
-        }
-      }
-    }
-    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
-  }, [soldOrders]);
-
-  const totalRevenue = soldOrders.reduce((sum, o) => sum + calcOrderTotal(o), 0);
-  const totalOrders = soldOrders.length;
-  const totalItemsSold = menuStats.reduce((s, m) => s + m.qty, 0);
-  const maxRevenue = menuStats.length ? menuStats[0].revenue : 0;
-
-  const rangeLabels = {
-    today: "วันนี้",
-    "7d": "7 วันล่าสุด",
-    "30d": "30 วันล่าสุด",
-    all: "ทั้งหมด",
-  };
-
-  // ดาวน์โหลดไฟล์ CSV (เปิดใน Excel ได้ รองรับภาษาไทย) — ใส่ BOM UTF-8 กันภาษาไทยเพี้ยน
-  const downloadCsv = (filename, rows) => {
-    const BOM = "\uFEFF";
-    const esc = (v) => {
-      const s = String(v ?? "");
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    const csv = BOM + rows.map((r) => r.map(esc).join(",")).join("\r\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  // รวมรายการสินค้าของออร์เดอร์เป็นข้อความเดียว (ชื่อ xจำนวน + ท็อปปิ้ง) สำหรับลงไฟล์
-  const formatItems = (o) =>
-    (o.items || [])
-      .map((i) => {
-        const addOns = (i.addOns || []).map((a) => `+${a.name}`).join(" ");
-        return `${i.name} x${i.qty}${addOns ? " (" + addOns + ")" : ""}`;
-      })
-      .join(" | ");
-
-  const exportSales = () => {
-    const rows = [
-      ["เลขออร์เดอร์", "วันที่สั่ง", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "ส่วนลด (บาท)", "วิธีชำระเงิน", "สถานะ"],
-      ...soldOrders.map((o) => [
-        o.orderNo,
-        new Date(o.createdAt).toLocaleString("th-TH"),
-        o.customerName || "",
-        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
-        formatItems(o),
-        calcOrderTotal(o),
-        (o.discount && o.discount.baht) || 0,
-        o.paymentMethod === "cash" ? "เงินสด" : o.paymentMethod === "promptpay" ? "พร้อมเพย์" : "บัตร",
-        o.status,
-      ]),
-    ];
-    downloadCsv(`ยอดขาย-${rangeLabels[range]}.csv`, rows);
-  };
-
-  const exportCancelled = () => {
-    const rows = [
-      ["เลขออร์เดอร์", "วันที่สั่ง", "วันที่ยกเลิก", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "สาเหตุที่ยกเลิก"],
-      ...cancelledOrders.map((o) => [
-        o.orderNo,
-        new Date(o.createdAt).toLocaleString("th-TH"),
-        o.cancelledAt ? new Date(o.cancelledAt).toLocaleString("th-TH") : "",
-        o.customerName || "",
-        o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง",
-        formatItems(o),
-        calcOrderTotal(o),
-        o.cancelReason || "",
-      ]),
-    ];
-    downloadCsv(`ที่ยกเลิก-${rangeLabels[range]}.csv`, rows);
-  };
-
-  return (
-    <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
-      <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold mb-1">
-        สรุปยอดขาย
-      </h1>
-      <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-        นับจากออร์เดอร์ในช่วงที่เลือก (ไม่รวมออร์เดอร์ที่ยกเลิก)
-        {cancelledInRange > 0 && ` · ยกเลิกไปแล้ว ${cancelledInRange} ออร์เดอร์`}
-      </p>
-
-      {/* ตัวเลือกช่วงเวลา */}
-      <div className="flex gap-1.5 mb-4">
-        {["today", "7d", "30d", "all"].map((r) => (
-          <button
-            key={r}
-            onClick={() => setRange(r)}
-            style={{
-              background: range === r ? COLORS.caramel : "#FFFFFF",
-              color: range === r ? "#FFF9F0" : COLORS.inkSoft,
-              border: `1px solid ${range === r ? COLORS.caramel : COLORS.line}`,
-            }}
-            className="flex-1 text-xs font-semibold py-2 rounded-full"
-          >
-            {rangeLabels[r]}
-          </button>
-        ))}
-      </div>
-
-      {/* ส่งออกข้อมูลเป็น Excel (CSV เปิดใน Excel ได้) */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={exportSales}
-          disabled={soldOrders.length === 0}
-          style={{
-            background: soldOrders.length > 0 ? COLORS.sage : "#E3DDD3",
-            color: soldOrders.length > 0 ? "#FFF9F0" : "#A99A87",
-            border: `1px solid ${soldOrders.length > 0 ? COLORS.sage : "#E3DDD3"}`,
-          }}
-          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
-        >
-          <DownloadIcon size={13} /> ส่งออกยอดขาย (Excel)
-        </button>
-        <button
-          onClick={exportCancelled}
-          disabled={cancelledOrders.length === 0}
-          style={{
-            background: cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3",
-            color: cancelledOrders.length > 0 ? "#FFF9F0" : "#A99A87",
-            border: `1px solid ${cancelledOrders.length > 0 ? "#C0533F" : "#E3DDD3"}`,
-          }}
-          className="flex-1 rounded-xl py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 disabled:cursor-not-allowed"
-        >
-          <DownloadIcon size={13} /> ส่งออกที่ยกเลิก (Excel)
-        </button>
-      </div>
-
-      {/* การ์ดสรุปตัวเลข */}
-      <div className="grid grid-cols-3 gap-2 mb-5">
-        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
-          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ยอดขาย</p>
-        </div>
-        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalOrders}</p>
-          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ออร์เดอร์</p>
-        </div>
-        <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">{totalItemsSold}</p>
-          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ชิ้นที่ขาย</p>
-        </div>
-      </div>
-
-      {menuStats.length === 0 && (
-        <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
-          <ChefHat size={32} className="mx-auto mb-2 opacity-50" />
-          ยังไม่มีออร์เดอร์ในช่วงนี้
-        </div>
-      )}
-
-      {menuStats.length > 0 && (
-        <div>
-          <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">ยอดขายตามเมนู</p>
-          <div className="space-y-2">
-            {menuStats.map((m) => {
-              const isOpen = expandedKey === m.key;
-              const addOnList = [...m.addOnCounts.entries()].sort((a, b) => b[1] - a[1]);
-              const barPct = maxRevenue ? Math.max(4, Math.round((m.revenue / maxRevenue) * 100)) : 0;
-              return (
-                <div
-                  key={m.key}
-                  style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
-                  className="rounded-2xl p-3.5"
-                >
-                  <button
-                    onClick={() => setExpandedKey(isOpen ? null : m.key)}
-                    className="w-full text-left"
-                    disabled={addOnList.length === 0}
-                  >
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <span style={{ color: COLORS.ink }} className="text-sm font-semibold">{m.name}</span>
-                      <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold flex-shrink-0">฿{m.revenue.toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div style={{ background: COLORS.paper, height: 6 }} className="flex-1 rounded-full overflow-hidden">
-                        <div style={{ background: COLORS.peach, width: `${barPct}%`, height: "100%" }} />
-                      </div>
-                      <span style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium flex-shrink-0">{m.qty} ชิ้น</span>
-                    </div>
-                    {addOnList.length > 0 && (
-                      <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
-                        {isOpen ? "ซ่อนรายละเอียดตัวเลือกเสริม ▲" : "ดูรายละเอียดตัวเลือกเสริม ▼"}
-                      </p>
-                    )}
-                  </button>
-                  {isOpen && addOnList.length > 0 && (
-                    <div style={{ borderTop: `1px dashed ${COLORS.line}` }} className="mt-2.5 pt-2.5 space-y-1.5">
-                      {addOnList.map(([name, count]) => (
-                        <div key={name} className="flex items-center justify-between text-xs">
-                          <span style={{ color: COLORS.inkSoft }}>{name}</span>
-                          <span style={{ color: COLORS.ink }} className="font-semibold">{count} ครั้ง</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* รายการที่ยกเลิก — แยกไว้อีกส่วน ดูสาเหตุการยกเลิกย้อนหลังได้ และส่งออก Excel แยกต่างหาก */}
+      {/* รายการที่ยกเลิก — แยกไว้อีกส่วน ดูสาเหตุการยกเลิกย้อนหลังได้ (จากหน้า "ยอดขาย" เดิมที่รวบมา) */}
       {cancelledOrders.length > 0 && (
         <div className="mt-8">
           <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">
@@ -6871,6 +6801,24 @@ function StaffDashboardView({ orders }) {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันลบรายจ่าย */}
+      {confirmDeleteExpense && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <div onClick={() => setConfirmDeleteExpense(null)} className="absolute inset-0 bg-black/30" />
+          <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-4">ลบรายจ่ายรายการนี้?</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDeleteExpense(null)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#FFFFFF", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}>
+                ยกเลิก
+              </button>
+              <button onClick={() => removeExpense(confirmDeleteExpense)} className="flex-1 rounded-xl py-2.5 text-xs font-semibold" style={{ background: "#C0533F", color: "#FFF9F0" }}>
+                ลบ
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -7734,13 +7682,31 @@ function App() {
 
   // เก็บเงินแล้ว (คนส่งเก็บเงินสด/เก็บปลายทางจากลูกค้าแล้ว) — จดสถานะว่าออร์เดอร์นี้จ่ายแล้ว
   // อัปเดต state ท้องถิ่นทันที (optimistic) แล้วค่อยซิงก์ Firestore ด้านหลัง
+  // หมายเหตุ: ไม่แตะฟิลด์ collectOnDelivery — เก็บค่าเดิมไว้ (ถ้าย้อนกลับเป็น "ยังไม่จ่าย"
+  // จะได้รู้ว่าออร์เดอร์นี้ต้องเก็บเงินตอนรับของไหม เหมือนตอนที่สั่ง)
   const markOrderPaid = (id) => {
-    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: true, collectOnDelivery: false } : o)));
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: true } : o)));
     if (FIREBASE_SYNC_ENABLED) {
       db.collection("orders")
         .doc(id)
-        .update({ paid: true, collectOnDelivery: false })
+        .update({ paid: true })
         .catch((err) => console.error("บันทึกสถานะจ่ายเงินไม่สำเร็จ:", err));
+    }
+  };
+
+  // ย้อนกลับสถานะเป็น "ยังไม่จ่าย" (กดผิด/เก็บเงินยังไม่ครบ) — มีป็อปอัพยืนยันก่อนกดที่หน้าการ์ด
+  // คืนค่า collectOnDelivery กลับตามเดิม: ออร์เดอร์เงินสดต้องเก็บตอนรับของเสมอ ส่วนออร์เดอร์อื่น
+  // ใช้ค่าเดิมที่จดไว้ตอนสั่ง (เก็บปลายทาง = true, โอน+สลิป = false)
+  const unmarkOrderPaid = (id) => {
+    const order = orders.find((o) => o.id === id);
+    if (!order) return;
+    const restoreCollect = order.paymentMethod === "cash" ? true : order.collectOnDelivery;
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, paid: false, collectOnDelivery: restoreCollect } : o)));
+    if (FIREBASE_SYNC_ENABLED) {
+      db.collection("orders")
+        .doc(id)
+        .update({ paid: false, collectOnDelivery: restoreCollect })
+        .catch((err) => console.error("ย้อนกลับสถานะจ่ายเงินไม่สำเร็จ:", err));
     }
   };
 
@@ -7941,11 +7907,10 @@ function App() {
                   { id: "staff-orders", label: "ออร์เดอร์ร้าน" },
                   { id: "staff-delivery", label: "จัดส่ง" },
                   { id: "staff-menu", label: "จัดการเมนู" },
-                  { id: "staff-promos", label: "โปรโมชั่น" },
-                  { id: "staff-members", label: "พนักงาน" },
-                  { id: "staff-dashboard", label: "ยอดขาย" },
                   { id: "staff-accounting", label: "บัญชี" },
                   { id: "staff-stock", label: "สต็อก" },
+                  { id: "staff-promos", label: "โปรโมชั่น" },
+                  { id: "staff-members", label: "พนักงาน" },
                 ].map((t) => (
                   <button
                     key={t.id}
@@ -8042,10 +8007,11 @@ function App() {
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
             onMarkPaid={markOrderPaid}
+            onUnmarkPaid={unmarkOrderPaid}
           />
         )}
         {role === "staff-delivery" && (
-          <StaffDeliveryView orders={orders} onAdvance={advanceOrder} onMarkPaid={markOrderPaid} />
+          <StaffDeliveryView orders={orders} onAdvance={advanceOrder} onMarkPaid={markOrderPaid} onUnmarkPaid={unmarkOrderPaid} />
         )}
         {role === "staff-menu" && (
           <MenuManagerView
@@ -8063,7 +8029,6 @@ function App() {
         {role === "staff-members" && (
           <StaffMembersView uid={uid} staffMembers={staffMembers} onAdd={addStaffUid} onRemove={removeStaffUid} onRename={renameStaffUid} />
         )}
-        {role === "staff-dashboard" && <StaffDashboardView orders={orders} />}
         {role === "staff-accounting" && (
           <StaffAccountingView
             orders={orders}
