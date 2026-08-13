@@ -972,9 +972,6 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                       <span style={{ color: COLORS.inkSoft }} className="line-through font-normal text-xs mr-1">฿{item.price}</span>
                     )}
                     ฿{discountedPrice}
-                    {hasAddOns && (
-                      <span style={{ color: COLORS.inkSoft }} className="font-normal text-xs"> (เลือกเพิ่มได้)</span>
-                    )}
                     {hasDiscount && (
                       <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
                         {discountLabelFor(item, promos)}
@@ -1227,33 +1224,25 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
         </button>
       )}
 
-      {/* Cart drawer */}
+      {/* Cart — เต็มจอ (เหมือนหน้าชำระเงิน) กันหน้าเมนูข้างหลังเลื่อนตาม */}
       {showCart && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div
-            onClick={() => setShowCart(false)}
-            className="absolute inset-0 bg-black/30"
-          />
-          <div
-            style={{ background: COLORS.cream }}
-            className="relative rounded-t-[28px] max-h-[80%] flex flex-col"
-          >
-            <div className="flex items-center justify-between px-5 pt-5 pb-3">
-              <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-xl font-semibold">
-                ตะกร้าของคุณ
-              </h2>
-              <button onClick={() => setShowCart(false)} style={{ color: COLORS.inkSoft }}>
-                <X size={22} />
-              </button>
-            </div>
-            <div className="overflow-y-auto px-5 space-y-3 pb-3">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <div className="px-5 pt-6 pb-2 flex-shrink-0">
+            <button onClick={() => setShowCart(false)} style={{ color: COLORS.inkSoft }} className="flex items-center gap-1 text-sm mb-3">
+              <ArrowLeft size={16} /> กลับไปสั่งเพิ่ม
+            </button>
+            <h1 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-2xl font-semibold">
+              ตะกร้าของคุณ
+            </h1>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 space-y-3 pb-3" style={{ overscrollBehavior: "contain" }}>
               {cart.map((item) => (
                 <div key={item.cartId} style={{ borderBottom: `1px solid ${COLORS.line}` }} className="pb-3">
                   <div className="flex items-center justify-between">
                     <div className="flex-1 min-w-0 pr-2">
                       <p style={{ color: COLORS.ink }} className="text-sm font-medium break-words">{item.name}</p>
                       {item.addOns && item.addOns.length > 0 && (
-                        <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
+                        <p style={{ color: COLORS.caramelDark, fontSize: 12 }} className="mt-0.5">
                           + {item.addOns.map((a) => a.name).join(", ")}
                         </p>
                       )}
@@ -1321,7 +1310,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 </div>
               ))}
             </div>
-            <div style={{ borderTop: `1px solid ${COLORS.line}` }} className="px-5 py-4">
+            <div style={{ borderTop: `1px solid ${COLORS.line}`, paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }} className="px-5 py-4 flex-shrink-0">
               {thresholdPromo &&
                 (thresholdMet ? (
                   <div className="flex items-center justify-between text-xs mb-1.5">
@@ -1347,7 +1336,6 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 <CreditCard size={18} /> ไปหน้าชำระเงิน
               </PrimaryButton>
             </div>
-          </div>
         </div>
       )}
     </div>
@@ -1356,13 +1344,15 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
 
 // ================= CHECKOUT VIEW =================
 function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliveryHours }) {
-  const [method, setMethod] = useState("promptpay");
+  const [method, setMethod] = useState("cash"); // default: จ่ายเงินสด (จ่ายตอนรับของ) — บัตรเครดิตยังไม่รองรับ เลยไม่มีตัวเลือก
   const [paying, setPaying] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [slipImg, setSlipImg] = useState(null); // { dataUrl, url } — url == dataUrl เสมอ (เก็บฝังใน Firestore ตรง ๆ)
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [custName, setCustName] = useState("");
+  const [custPhone, setCustPhone] = useState(""); // เบอร์โทรติดต่อกลับ (ร้านโทรหาถ้าเกิดปัญหา)
   const [deliveryMethod, setDeliveryMethod] = useState("delivery"); // pickup | delivery — รับที่ร้าน หรือ จัดส่ง
+  const [deliveryNow, setDeliveryNow] = useState(true); // จัดส่ง: true = ส่งตอนนี้ (เร็วที่สุด) / false = เลือกวันเวลาล่วงหน้า
   const [custHouseNo, setCustHouseNo] = useState("");
   const [custDeliveryDate, setCustDeliveryDate] = useState("");
   const [custDeliveryTime, setCustDeliveryTime] = useState("");
@@ -1495,8 +1485,11 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
 
   const handleConfirm = () => {
     const isPickup = deliveryMethod === "pickup";
-    // รับที่ร้าน: ต้องกรอกชื่อเท่านั้น — จัดส่ง: ต้องกรอกชื่อ บ้านเลขที่ และเลือกวันเวลา
-    const missing = !custName.trim() || (!isPickup && (!custHouseNo.trim() || !custDeliveryDate || !custDeliveryTime));
+    // รับที่ร้าน: ต้องกรอกชื่อเท่านั้น — จัดส่ง: ต้องกรอกชื่อ+บ้านเลขที่ และถ้าเลือกส่งล่วงหน้าต้องเลือกวันเวลาด้วย
+    const missing =
+      !custName.trim() ||
+      !custPhone.trim() ||
+      (!isPickup && (!custHouseNo.trim() || (!deliveryNow && (!custDeliveryDate || !custDeliveryTime))));
     if (missing) {
       setCustError(true);
       // เลื่อนจอไปที่ฟอร์มชื่อ/บ้านเลขที่/เวลาจัดส่ง ให้ลูกค้าเห็นทันทีว่าลืมกรอกตรงไหน
@@ -1508,10 +1501,12 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
     setCustError(false);
     const customer = {
       name: custName.trim(),
+      phone: custPhone.trim(),
       method: deliveryMethod,
       houseNo: isPickup ? "" : custHouseNo.trim(),
-      deliveryDate: isPickup ? "" : custDeliveryDate,
-      deliveryTime: isPickup ? "" : custDeliveryTime,
+      deliveryDate: isPickup || deliveryNow ? "" : custDeliveryDate,
+      deliveryTime: isPickup || deliveryNow ? "" : custDeliveryTime,
+      deliveryNow: deliveryMethod === "delivery" && deliveryNow, // ส่งตอนนี้ (เร็วที่สุด) — ฝั่งพนักงานจะเห็นป้ายนี้
     };
     if (isCash) {
       onPaid(method, null, customer, getDiscount());
@@ -1537,17 +1532,17 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-4 mb-4">
         {cart.map((item) => (
           <div key={item.cartId} className="py-1.5">
-            <div className="flex justify-between text-sm gap-2">
-              <span style={{ color: COLORS.inkSoft }} className="flex-1 min-w-0 break-words">{item.name} × {item.qty}</span>
-              <span style={{ color: COLORS.ink }} className="font-medium flex-shrink-0">฿{item.price * item.qty}</span>
+            <div className="flex justify-between gap-2">
+              <span style={{ color: COLORS.ink, fontSize: 16 }} className="flex-1 min-w-0 break-words font-semibold">{item.name} × {item.qty}</span>
+              <span style={{ color: COLORS.ink, fontSize: 16 }} className="font-semibold flex-shrink-0">฿{item.price * item.qty}</span>
             </div>
             {item.addOns && item.addOns.length > 0 && (
-              <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
+              <p style={{ color: COLORS.caramelDark, fontSize: 12 }} className="mt-0.5">
                 + {item.addOns.map((a) => a.name).join(", ")}
               </p>
             )}
             {item.note && item.note.trim() && (
-              <p style={{ color: COLORS.caramelDark }} className="text-xs mt-0.5 flex items-start gap-1">
+              <p style={{ color: COLORS.caramelDark, fontSize: 12 }} className="mt-0.5 flex items-start gap-1">
                 <Pencil size={10} className="mt-0.5 flex-shrink-0" /> {item.note}
               </p>
             )}
@@ -1673,8 +1668,118 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
             className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
           />
         </div>
+        <div>
+          <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">เบอร์โทรติดต่อกลับ *</label>
+          <input
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            required
+            value={custPhone}
+            onChange={(e) => { setCustPhone(e.target.value); setCustError(false); }}
+            placeholder="เช่น 081-234-5678"
+            style={{ border: `1.5px solid ${COLORS.line}`, color: COLORS.ink }}
+            className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
+          />
+        </div>
         {deliveryMethod === "delivery" ? (
           <>
+            <div>
+              <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">เวลาที่ต้องการจัดส่ง</label>
+              <div className="flex gap-2">
+                {[
+                  { id: "now", label: "ส่งตอนนี้", icon: Truck },
+                  { id: "schedule", label: "ส่งล่วงหน้า", icon: CalendarIcon },
+                ].map((o) => {
+                  const active = (o.id === "now") === deliveryNow;
+                  return (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => { setDeliveryNow(o.id === "now"); setCustError(false); }}
+                      style={{
+                        flex: 1,
+                        background: active ? COLORS.peachSoft : "#FFFFFF",
+                        border: `1.5px solid ${active ? COLORS.caramel : COLORS.line}`,
+                      }}
+                      className="rounded-xl px-4 py-3 flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+                    >
+                      <o.icon size={16} style={{ color: active ? COLORS.caramelDark : COLORS.inkSoft }} />
+                      <span style={{ color: active ? COLORS.caramelDark : COLORS.inkSoft }} className="text-sm font-semibold">{o.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {deliveryNow ? (
+                <p style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-xs rounded-xl px-3.5 py-2.5 mt-2 leading-relaxed">
+                  กรุณารอสักครู่ — เมื่อออร์เดอร์ทำเสร็จแล้ว ร้านจะดำเนินการจัดส่งให้เร็วที่สุด
+                </p>
+              ) : (
+                <>
+                  <div className="mt-3">
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1.5 block">วันที่ต้องการจัดส่ง</label>
+                    <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+                      {dateOptions.map((opt) => (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => {
+                            setCustDeliveryDate(opt.key);
+                            setCustError(false);
+                            // เปลี่ยนมาเลือก "วันนี้" แล้วเวลาที่เคยเลือกไว้อาจผ่านไปแล้ว — เคลียร์ให้เลือกใหม่
+                            if (opt.key === todayKey() && custDeliveryTime && custDeliveryTime <= nowStr) setCustDeliveryTime("");
+                          }}
+                          style={{
+                            background: custDeliveryDate === opt.key ? COLORS.caramel : COLORS.paper,
+                            color: custDeliveryDate === opt.key ? "#FFF9F0" : COLORS.inkSoft,
+                            border: `1.5px solid ${custDeliveryDate === opt.key ? COLORS.caramel : COLORS.line}`,
+                          }}
+                          className="flex-shrink-0 rounded-full px-3.5 py-2 text-xs font-semibold whitespace-nowrap"
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">ช่วงเวลาที่ต้องการจัดส่ง</label>
+                    <select
+                      value={custDeliveryTime}
+                      onChange={(e) => { setCustDeliveryTime(e.target.value); setCustError(false); }}
+                      style={{ border: `1.5px solid ${COLORS.line}`, color: custDeliveryTime ? COLORS.ink : COLORS.inkSoft }}
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none bg-white"
+                    >
+                      <option value="">เลือกเวลา...</option>
+                      {/* วันนี้ — ปัดช่วงเวลาที่ผ่านไปแล้วออก (เลือกไม่ได้) เหลือแต่เวลาที่ยังจัดส่งได้ */}
+                      {deliverySlots.map((t) => {
+                        const past = isTodayDelivery && t <= nowStr;
+                        return (
+                          <option key={t} value={t} disabled={past}>
+                            {t} น.{past ? " (ผ่านไปแล้ว)" : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {isTodayDelivery ? (
+                      remainingSlotsToday.length > 0 ? (
+                        <p style={{ color: COLORS.sage }} className="text-xs mt-1.5 flex items-center gap-1">
+                          <Clock size={11} className="flex-shrink-0" />
+                          ตอนนี้เวลา {nowStr} น. — วันนี้เหลือเวลาจัดส่ง {remainingSlotsToday.length} ช่วงเวลา
+                        </p>
+                      ) : (
+                        <p style={{ color: "#C0533F" }} className="text-xs mt-1.5">
+                          วันนี้หมดเวลาจัดส่งแล้ว ({nowStr} น.) — กรุณาเลือกวันพรุ่งนี้หรือวันถัดไป
+                        </p>
+                      )
+                    ) : (
+                      <p style={{ color: COLORS.inkSoft }} className="text-xs mt-1.5">
+                        ร้านจัดส่งช่วง {deliverySlots[0] || "09:00"} – {deliverySlots[deliverySlots.length - 1] || "20:00"} น. (ทุก 30 นาที)
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
             <div>
               <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">บ้านเลขที่ / ที่อยู่จัดส่ง</label>
               <input
@@ -1687,68 +1792,6 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
                 style={{ border: `1.5px solid ${COLORS.line}`, color: COLORS.ink }}
                 className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none"
               />
-              <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">กรอกได้ทั้งตัวเลขและสัญลักษณ์ เช่น 15/113, 12/3 หมู่ 5</p>
-            </div>
-            <div>
-              <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1.5 block">วันที่ต้องการจัดส่ง</label>
-              <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
-                {dateOptions.map((opt) => (
-                  <button
-                    key={opt.key}
-                    type="button"
-                    onClick={() => {
-                      setCustDeliveryDate(opt.key);
-                      setCustError(false);
-                      // เปลี่ยนมาเลือก "วันนี้" แล้วเวลาที่เคยเลือกไว้อาจผ่านไปแล้ว — เคลียร์ให้เลือกใหม่
-                      if (opt.key === todayKey() && custDeliveryTime && custDeliveryTime <= nowStr) setCustDeliveryTime("");
-                    }}
-                    style={{
-                      background: custDeliveryDate === opt.key ? COLORS.caramel : COLORS.paper,
-                      color: custDeliveryDate === opt.key ? "#FFF9F0" : COLORS.inkSoft,
-                      border: `1.5px solid ${custDeliveryDate === opt.key ? COLORS.caramel : COLORS.line}`,
-                    }}
-                    className="flex-shrink-0 rounded-full px-3.5 py-2 text-xs font-semibold whitespace-nowrap"
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium mb-1 block">ช่วงเวลาที่ต้องการจัดส่ง</label>
-              <select
-                value={custDeliveryTime}
-                onChange={(e) => { setCustDeliveryTime(e.target.value); setCustError(false); }}
-                style={{ border: `1.5px solid ${COLORS.line}`, color: custDeliveryTime ? COLORS.ink : COLORS.inkSoft }}
-                className="w-full rounded-xl px-3.5 py-2.5 text-sm outline-none bg-white"
-              >
-                <option value="">เลือกเวลา...</option>
-                {/* วันนี้ — ปัดช่วงเวลาที่ผ่านไปแล้วออก (เลือกไม่ได้) เหลือแต่เวลาที่ยังจัดส่งได้ */}
-                {deliverySlots.map((t) => {
-                  const past = isTodayDelivery && t <= nowStr;
-                  return (
-                    <option key={t} value={t} disabled={past}>
-                      {t} น.{past ? " (ผ่านไปแล้ว)" : ""}
-                    </option>
-                  );
-                })}
-              </select>
-              {isTodayDelivery ? (
-                remainingSlotsToday.length > 0 ? (
-                  <p style={{ color: COLORS.sage }} className="text-[11px] mt-1.5 flex items-center gap-1">
-                    <Clock size={11} className="flex-shrink-0" />
-                    ตอนนี้เวลา {nowStr} น. — วันนี้เหลือเวลาจัดส่ง {remainingSlotsToday.length} ช่วงเวลา
-                  </p>
-                ) : (
-                  <p style={{ color: "#C0533F" }} className="text-[11px] mt-1.5">
-                    วันนี้หมดเวลาจัดส่งแล้ว ({nowStr} น.) — กรุณาเลือกวันพรุ่งนี้หรือวันถัดไป
-                  </p>
-                )
-              ) : (
-                <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1.5">
-                  ร้านจัดส่งช่วง {deliverySlots[0] || "09:00"} – {deliverySlots[deliverySlots.length - 1] || "20:00"} น. (ทุก 30 นาที)
-                </p>
-              )}
             </div>
           </>
         ) : (
@@ -1759,8 +1802,10 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
         {custError && (
           <p className="text-xs" style={{ color: "#C0533F" }}>
             {deliveryMethod === "pickup"
-              ? "กรุณากรอกชื่อก่อนยืนยัน"
-              : "กรุณากรอกชื่อ บ้านเลขที่ และเลือกวันเวลาจัดส่งก่อนยืนยัน"}
+              ? "กรุณากรอกชื่อและเบอร์โทรติดต่อกลับก่อนยืนยัน"
+              : deliveryNow
+              ? "กรุณากรอกชื่อ เบอร์โทร และบ้านเลขที่ก่อนยืนยัน"
+              : "กรุณากรอกชื่อ เบอร์โทร บ้านเลขที่ และเลือกวันเวลาจัดส่งก่อนยืนยัน"}
           </p>
         )}
       </div>
@@ -1768,9 +1813,8 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       <p style={{ color: COLORS.inkSoft }} className="text-xs font-semibold mb-2 px-1">เลือกวิธีชำระเงิน</p>
       <div className="space-y-2 mb-6">
         {[
-          { id: "promptpay", label: "พร้อมเพย์ (สแกน QR)", icon: QrCode },
-          { id: "card", label: "บัตรเครดิต / เดบิต", icon: CreditCard },
           { id: "cash", label: "จ่ายเงินสด", icon: Banknote },
+          { id: "promptpay", label: "พร้อมเพย์ (สแกน QR)", icon: QrCode },
         ].map((m) => (
           <button
             key={m.id}
@@ -1953,8 +1997,12 @@ function drawOrderReceipt(order, shopName) {
     itemH += 22 * ((i.addOns && i.addOns.length) || 0);
     if (i.note && i.note.trim()) itemH += 30;
   });
-  // แถวข้อมูลลูกค้า: รับที่ร้าน = 3 แถว (ชื่อ, วิธีรับ, ชำระเงิน) / จัดส่ง+มีวันเวลา = 4 แถว
-  const infoRows = order.method === "delivery" && order.deliveryDate && order.deliveryTime ? 4 : 3;
+  // แถวข้อมูลลูกค้า: นับตามข้อมูลจริง (ชื่อ + เบอร์โทร + วิธีรับ + ชำระเงิน [+ เวลาจัดส่ง ถ้ามีวันเวลาหรือส่งตอนนี้])
+  const infoRows =
+    (order.customerName ? 1 : 0) +
+    (order.phone ? 1 : 0) +
+    2 + // การรับสินค้า + ชำระเงิน
+    (order.method === "delivery" && ((order.deliveryDate && order.deliveryTime) || order.deliveryNow) ? 1 : 0);
   // ชื่อร้าน — ลดขนาดอัตโนมัติถ้ายาวเกิน (กันล้นขอบใบ) ยาวมากจริง ๆ ห่อเป็น 2 บรรทัดแล้วเลื่อนส่วนหัวลง
   const shopNameText = shopName || "น้ำหวาน & เบเกอรี่";
   const nameMaxW = W - 2 * M - 16;
@@ -1993,12 +2041,15 @@ function drawOrderReceipt(order, shopName) {
   // ข้อมูลลูกค้า / วิธีรับสินค้า
   const info = [];
   if (order.customerName) info.push(["ชื่อลูกค้า", order.customerName]);
+  if (order.phone) info.push(["โทรติดต่อ", order.phone]);
   if (order.method === "pickup") {
     info.push(["การรับสินค้า", "รับที่ร้าน"]);
   } else {
     info.push(["การรับสินค้า", `จัดส่ง${order.houseNo ? " · บ้านเลขที่ " + order.houseNo : ""}`]);
     if (order.deliveryDate && order.deliveryTime) {
       info.push(["เวลาจัดส่ง", `${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`]);
+    } else if (order.deliveryNow) {
+      info.push(["เวลาจัดส่ง", "ส่งตอนนี้ (เร็วที่สุด)"]);
     }
   }
   info.push(["ชำระเงิน", order.paymentMethod === "cash" ? "เงินสด (จ่ายตอนรับสินค้า)" : "พร้อมเพย์/โอน"]);
@@ -2146,6 +2197,10 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
       ) : customer?.deliveryDate && customer?.deliveryTime ? (
         <p style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-xs font-semibold rounded-full px-3.5 py-1.5 mb-3 inline-flex items-center gap-1.5">
           <Truck size={13} /> จัดส่ง {formatDeliveryDateLabel(customer.deliveryDate)} เวลา {customer.deliveryTime} น.
+        </p>
+      ) : customer?.deliveryNow ? (
+        <p style={{ background: COLORS.peachSoft, color: COLORS.caramelDark }} className="text-xs font-semibold rounded-full px-3.5 py-1.5 mb-3 inline-flex items-center gap-1.5">
+          <Truck size={13} /> จัดส่งตอนนี้ — ร้านจะจัดส่งให้เร็วที่สุดเมื่อออร์เดอร์เสร็จ
         </p>
       ) : null}
       {paymentMethod === "cash" && (
@@ -3783,6 +3838,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   <span style={{ color: COLORS.ink }} className="font-bold text-sm">#{order.orderNo}</span>
                   <Chip>
                     <Users size={11} /> {order.customerName || "ไม่ระบุชื่อ"}
+                    {order.phone ? ` · โทร ${order.phone}` : ""}
                     {order.houseNo ? ` · บ้านเลขที่ ${order.houseNo}` : ""}
                   </Chip>
                   {order.method === "pickup" ? (
@@ -3792,6 +3848,10 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   ) : order.deliveryDate && order.deliveryTime ? (
                     <Chip tone="sage">
                       <Truck size={11} /> {formatDeliveryDateLabel(order.deliveryDate)} {order.deliveryTime} น.
+                    </Chip>
+                  ) : order.deliveryNow ? (
+                    <Chip tone="sage">
+                      <Truck size={11} /> ส่งตอนนี้ (เร็วที่สุด)
                     </Chip>
                   ) : null}
                   {order.paymentMethod === "cash" && (
@@ -4032,6 +4092,8 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                           ? "รับที่ร้าน"
                           : order.deliveryDate && order.deliveryTime
                           ? `จัดส่ง ${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`
+                          : order.deliveryNow
+                          ? "จัดส่งตอนนี้"
                           : "จัดส่ง"}{" "}
                         · ฿{total}
                       </p>
@@ -4224,6 +4286,8 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                           ? "รับที่ร้าน"
                           : order.deliveryDate && order.deliveryTime
                           ? `จัดส่ง ${formatDeliveryDateLabel(order.deliveryDate)} ${order.deliveryTime} น.`
+                          : order.deliveryNow
+                          ? "จัดส่งตอนนี้"
                           : "จัดส่ง"}{" "}
                         · ฿{total}
                         {order.cancelReason ? ` · ${order.cancelReason}` : ""}
@@ -4448,7 +4512,7 @@ function StaffDeliveryView({ orders, onAdvance }) {
       {unscheduled.length > 0 && (
         <div>
           <div className="flex items-center gap-2 mb-2 px-1">
-            <span style={{ color: COLORS.inkSoft }} className="text-sm font-bold">ไม่ระบุเวลาจัดส่ง</span>
+            <span style={{ color: COLORS.inkSoft }} className="text-sm font-bold">ส่งตอนนี้ / ไม่ระบุเวลา</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({unscheduled.length} ออร์เดอร์)</span>
           </div>
           <div className="space-y-2.5">
@@ -4465,7 +4529,12 @@ function StaffDeliveryView({ orders, onAdvance }) {
                     <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
                       #{order.orderNo} · {order.customerName || "ไม่ระบุชื่อ"}
                     </p>
-                    <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">บ้านเลขที่ {order.houseNo || "-"} · ฿{total}</p>
+                    <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
+                      {order.deliveryNow && (
+                        <span style={{ color: COLORS.sage }} className="font-semibold">ส่งตอนนี้ · </span>
+                      )}
+                      บ้านเลขที่ {order.houseNo || "-"} · ฿{total}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span
@@ -7108,10 +7177,12 @@ function App() {
     const newOrder = {
       orderNo,
       customerName: customer?.name || "",
+      phone: customer?.phone || "", // เบอร์ติดต่อกลับ (ร้านโทรหาถ้าเกิดปัญหา)
       method: customer?.method || "delivery", // pickup | delivery
       houseNo: customer?.houseNo || "",
       deliveryDate: customer?.deliveryDate || "",
       deliveryTime: customer?.deliveryTime || "",
+      deliveryNow: customer?.deliveryNow || false, // ส่งตอนนี้ (เร็วที่สุด) — ไม่มีวันเวลาล่วงหน้า
       items: cart,
       status: "new",
       createdAt: Date.now(),
