@@ -6961,6 +6961,7 @@ function App() {
   const [staffCheckError, setStaffCheckError] = useState(false); // ตรวจสอบสิทธิ์ไม่สำเร็จ (เน็ต / rules ยังไม่ได้อัปเดต)
   const [uidCopied, setUidCopied] = useState(false);
   const [uid, setUid] = useState(null); // ทุกคนที่เปิดแอป (ลูกค้า/พนักงาน) ได้ uid นิรนามจาก Firebase Auth (เฉพาะตอนเปิด sync)
+  const [prevUid, setPrevUid] = useState(null); // uid ที่เครื่องนี้เคยใช้ครั้งก่อน (จดไว้ใน localStorage) — ไว้เตือนถ้า uid เปลี่ยน
   const staffTabsRef = useRef(null); // แถบแท็บพนักงาน — ใช้เลื่อนซ้าย/ขวาด้วยลูกศร
   const [anyModalOpen, setAnyModalOpen] = useState(false); // มีหน้าต่าง/ดรอว์เวอร์เปิดอยู่ → ซ่อนแถบแท็บ (ไม่ให้บังปุ่มปิดของหน้าต่าง)
   // ตรวจจับหน้าต่างที่เปิดอยู่ (fixed inset-0) ทุกหน้า — มีหน้าต่างเปิดเมื่อไหร่ แถบแท็บหายทันที
@@ -7000,6 +7001,20 @@ function App() {
       // no-op — if URL isn't accessible for some reason, just stay in customer mode
     }
   }, []);
+
+  // จดจำ uid ล่าสุดของเครื่องนี้ไว้ — ถ้า uid เปลี่ยน (เช่น เปิดลิงก์คนละเบราว์เซอร์ / ล้างข้อมูล / โหมดส่วนตัว)
+  // จะเตือนบนหน้า "เครื่องนี้ยังไม่ได้รับสิทธิ์" เพราะรหัสที่เจ้าของร้านเพิ่มไปแล้วอาจไม่ตรงกับรหัสปัจจุบันของเครื่อง
+  useEffect(() => {
+    if (!isStaffLink || !uid || uid === "offline") return;
+    try {
+      const key = "freebuff_lastDeviceUid";
+      const prev = localStorage.getItem(key);
+      if (prev && prev !== uid) setPrevUid(prev);
+      localStorage.setItem(key, uid);
+    } catch (e) {
+      // localStorage อาจถูกปิดใช้งาน — ข้ามไป ไม่กระทบฟังก์ชันหลัก
+    }
+  }, [isStaffLink, uid]);
 
   // ตรวจสอบว่าเครื่องนี้ได้รับสิทธิ์เป็นพนักงานแล้วหรือยัง — อ่านเฉพาะเอกสาร staffUids/{uid ของตัวเอง}
   // (rules เปิด read ให้เฉพาะ uid ตัวเอง → ไม่เปิดเผยรายชื่อพนักงานทั้งหมดให้ลูกค้าเห็น)
@@ -7804,10 +7819,22 @@ function App() {
             <X size={22} />
           </div>
           <p style={{ color: COLORS.ink }} className="text-lg font-semibold mb-1">เครื่องนี้ยังไม่ได้รับสิทธิ์</p>
-          <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4 leading-relaxed">
-            ต้องให้เจ้าของร้านเพิ่มรหัสอุปกรณ์ด้านล่างนี้ใน Firebase Console ก่อน (Firestore → staffUids →
-            สร้างเอกสารใหม่โดยใช้รหัสนี้เป็นชื่อเอกสาร) แล้วกด "ตรวจสอบสิทธิ์อีกครั้ง" — ทำครั้งเดียวต่อเครื่อง
+          <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3 leading-relaxed">
+            ต้องให้เจ้าของร้านเพิ่มรหัสอุปกรณ์ด้านล่างนี้ (ในแอป: แท็บ "สิทธิ์พนักงาน" → วางรหัส → เพิ่มสิทธิ์
+            หรือใน Firebase Console: Firestore → staffUids → สร้างเอกสารใหม่โดยใช้รหัสนี้เป็นชื่อเอกสาร)
+            แล้วกด "ตรวจสอบสิทธิ์อีกครั้ง" — ทำครั้งเดียวต่อเครื่อง
           </p>
+
+          {/* ถ้ารหัสอุปกรณ์เปลี่ยนจากครั้งก่อน (เปิดคนละเบราว์เซอร์ / ล้างข้อมูล / โหมดส่วนตัว) — เตือนว่าทำไมสิทธิ์ถึงยังไม่ติด */}
+          {prevUid && (
+            <div
+              style={{ background: "#F3D9D3", color: "#A03A2A", border: "1px solid #E4B4A9" }}
+              className="rounded-xl px-3 py-2.5 text-[11px] font-medium mb-3 leading-relaxed text-left"
+            >
+              ⚠️ รหัสอุปกรณ์ของเครื่องนี้เปลี่ยนจากครั้งก่อนหน้าแล้ว — ถ้าเจ้าของร้านเพิ่มรหัสเก่าไปแล้ว รหัสใหม่ด้านล่างนี้จะยังเข้าไม่ได้
+              ให้เจ้าของร้านเพิ่มรหัสใหม่นี้ หรือเปิดลิงก์ด้วยเบราว์เซอร์เดิมที่เคยเปิด
+            </div>
+          )}
           <div
             style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
             className="rounded-xl px-3 py-3 text-xs font-mono break-all mb-2 select-all"
