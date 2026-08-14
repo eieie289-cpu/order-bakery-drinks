@@ -4359,7 +4359,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive, onTransferGoods, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive, onTransferGoods, onUntagTransfer, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
@@ -4370,6 +4370,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
   const [confirmReviveId, setConfirmReviveId] = useState(null); // order id รอ confirm "ลูกค้ามารับของแล้ว" (ยกเลิกแล้วแต่มารับของ)
   const [transferFromId, setTransferFromId] = useState(null); // ออร์เดอร์ A (ยกเลิก+ทำแล้ว) ที่กำลังเลือกออร์เดอร์ให้ของ — เปิดชีต
   const [transferPair, setTransferPair] = useState(null); // { from, to } — รอ confirm โอนของจาก A ไปให้ B
+  const [confirmUntagTransferId, setConfirmUntagTransferId] = useState(null); // รอ confirm ยกเลิกการโอนของ (กดจากปุ่มเดิมบนการ์ด A ที่โอนไปแล้ว)
   const [deleteCancelPickOpen, setDeleteCancelPickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ
   const [deleteCancelPickIds, setDeleteCancelPickIds] = useState([]); // id ออร์เดอร์ที่ยกเลิกที่ติ๊กเลือกไว้
   const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกที่เลือกไว้
@@ -4721,16 +4722,23 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   )}
                   {order.status === "cancelled" &&
                     order.cancelledFrom === "done" &&
-                    !order.goodsUsedByOrderId &&
-                    hasMatchFor(order) && (
-                    <button
-                      onClick={() => setTransferFromId(order.id)}
-                      style={{ background: COLORS.caramel, color: "#FFF9F0" }}
-                      className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
-                    >
-                      <ShareIcon size={12} /> ใช้ของให้ออร์เดอร์อื่น
-                    </button>
-                  )}
+                    (order.goodsUsedByOrderId ? (
+                      <button
+                        onClick={() => setConfirmUntagTransferId(order.id)}
+                        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+                      >
+                        <ArrowLeft size={12} /> ยกเลิกการโอน
+                      </button>
+                    ) : hasMatchFor(order) ? (
+                      <button
+                        onClick={() => setTransferFromId(order.id)}
+                        style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                        className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+                      >
+                        <ShareIcon size={12} /> ใช้ของให้ออร์เดอร์อื่น
+                      </button>
+                    ) : null)}
                   {meta.action && (
                     <button
                       onClick={() => advance(order.id)}
@@ -5107,6 +5115,46 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                 className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
               >
                 ยืนยัน โอนของ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยืนยันยกเลิกการโอนของ — กดจากปุ่มเดิมบนการ์ด A ที่โอนไปแล้ว (เลือก B ผิด/เปลี่ยนใจ) */}
+      {confirmUntagTransferId && (
+        <div
+          onClick={() => setConfirmUntagTransferId(null)}
+          style={{ background: "rgba(20,14,8,0.55)" }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
+        >
+          <SheetLock />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#FFFFFF" }}
+            className="w-full max-w-sm rounded-2xl p-5"
+          >
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">ยกเลิกการโอนของไหม?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              ออร์เดอร์ #{orders.find((o) => o.id === confirmUntagTransferId)?.orderNo || ""} จะกลับเป็น "ยังไม่ได้โอน" —
+              ออร์เดอร์ #
+              {orders.find((o) => o.id === orders.find((x) => x.id === confirmUntagTransferId)?.goodsUsedByOrderId)?.orderNo || ""}
+              จะต้องทำของใหม่ (ตัดสต็อกตอนทำเสร็จ) และต้นทุนของออร์เดอร์นี้จะกลับไปนับเป็นขาดทุนในบัญชี
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmUntagTransferId(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ไม่เอาแล้ว
+              </button>
+              <button
+                onClick={() => { onUntagTransfer(confirmUntagTransferId); setConfirmUntagTransferId(null); }}
+                style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยืนยัน ยกเลิกการโอน
               </button>
             </div>
           </div>
@@ -8801,6 +8849,41 @@ function App() {
     }
   };
 
+  // ยกเลิกการโอนของ — กดจากปุ่มเดิมบนการ์ด A ที่โอนไปแล้ว (เลือก B ผิด/เปลี่ยนใจ)
+  // ล้างเครื่องหมายทั้ง 2 ฝั่งกลับเป็น "ยังไม่ได้โอน": A กลับไปนับขาดทุนในบัญชี, B ต้องทำของใหม่ + ตัดสต็อกตอนทำเสร็จ
+  const untagTransferGoods = async (id) => {
+    const order = orders.find((o) => o.id === id);
+    if (!order || order.status !== "cancelled" || !order.goodsUsedByOrderId) return;
+    const targetId = order.goodsUsedByOrderId;
+    setOrders((prev) =>
+      prev.map((o) => {
+        if (o.id === id) {
+          const { goodsUsedByOrderId, ...rest } = o;
+          return rest;
+        }
+        if (o.id === targetId) {
+          const { goodsFromOrderId, ...rest } = o;
+          return rest;
+        }
+        return o;
+      })
+    );
+    if (FIREBASE_SYNC_ENABLED) {
+      try {
+        await db
+          .collection("orders")
+          .doc(id)
+          .update({ goodsUsedByOrderId: firebase.firestore.FieldValue.delete() });
+        await db
+          .collection("orders")
+          .doc(targetId)
+          .update({ goodsFromOrderId: firebase.firestore.FieldValue.delete() });
+      } catch (err) {
+        console.error("Failed to undo goods transfer:", err);
+      }
+    }
+  };
+
   // ลบออร์เดอร์รายตัว — พนักงานกดลบเองจากการ์ดออร์เดอร์ (มี confirm กันกดพลาด)
   const deleteOrder = async (id) => {
     if (FIREBASE_SYNC_ENABLED) {
@@ -9152,6 +9235,7 @@ function App() {
             onCancel={cancelOrder}
             onRevive={reviveCancelledOrder}
             onTransferGoods={transferGoods}
+            onUntagTransfer={untagTransferGoods}
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
             onMarkPaid={markOrderPaid}
