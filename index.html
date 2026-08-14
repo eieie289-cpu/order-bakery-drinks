@@ -6049,21 +6049,11 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const activeRound = salesRound && salesRound.active ? salesRound.active : null;
   const roundHistory = (salesRound && salesRound.history) || [];
 
-  // ยอดขายเงินสดในรอบนี้ (ออร์เดอร์เงินสดที่ไม่ถูกยกเลิก ตั้งแต่เปิดรอบ) — ใช้ตัวเลขจริง ไม่ผูกกับช่วงเวลา
-  // นับเฉพาะออร์เดอร์ที่เก็บเงินแล้ว (เงินเข้าโต๊ะจริง) — ออร์เดอร์เงินสดที่ยังไม่จ่าย (คนส่งยังไปเก็บ)
-  // จะไม่นับในยอดคาดหวัง จนกว่าจะกด "เก็บเงินแล้ว" (แยกดูได้จากบรรทัด "ยังไม่เก็บ")
+  // ยอดขายเงินสดในรอบนี้ — นับเฉพาะออร์เดอร์เงินสดที่เก็บเงินได้แล้ว (คนส่งกด "เก็บเงินแล้ว" แล้ว) ตั้งแต่เปิดรอบ
   const cashSalesInRound = useMemo(() => {
     if (!activeRound) return 0;
     return orders
       .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && orderIsPaid(o))
-      .reduce((s, o) => s + calcOrderTotal(o), 0);
-  }, [orders, activeRound]);
-
-  // เงินสดจากออร์เดอร์ที่ยังไม่ได้เก็บ (คนส่งไปเก็บแล้วยังไม่กลับ / ยังไม่กด "เก็บเงินแล้ว")
-  const unpaidCashInRound = useMemo(() => {
-    if (!activeRound) return 0;
-    return orders
-      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && !orderIsPaid(o))
       .reduce((s, o) => s + calcOrderTotal(o), 0);
   }, [orders, activeRound]);
 
@@ -6141,10 +6131,10 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
 
   const rangeLabels = { today: "วันนี้", "7d": "7 วันล่าสุด", "30d": "30 วันล่าสุด", all: "ทั้งหมด" };
 
-  // ยอดขายในช่วง (ไม่รวมที่ยกเลิก)
+  // ยอดขายในช่วง — นับเฉพาะออร์เดอร์ที่เก็บเงินได้แล้ว (จ่ายแล้ว/รับเงินแล้ว) ไม่รวมที่ยกเลิก
   const sold = useMemo(() => {
     const list = rangeStart === null ? orders : orders.filter((o) => o.createdAt >= rangeStart);
-    return list.filter((o) => o.status !== "cancelled");
+    return list.filter((o) => o.status !== "cancelled" && orderIsPaid(o));
   }, [orders, rangeStart]);
 
   // ต้นทุนของสินค้าแต่ละชิ้นในออร์เดอร์ — ต้นทุนตัวเมนู + ต้นทุนท็อปปิ้ง/แอดออนที่เลือก (ต้นทุน/หน่วย x จำนวน)
@@ -6170,27 +6160,19 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   const totalExpense = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const netProfit = grossProfit - totalExpense;
 
-  // สรุปแยกตามวิธีชำระเงิน + แยก จ่ายแล้ว / ยังไม่จ่าย (ออร์เดอร์เงินสด/เก็บปลายทางที่ยังไม่ได้เก็บเงิน)
+  // สรุปแยกตามวิธีชำระเงิน (นับเฉพาะที่เก็บเงินได้แล้ว)
   const payStats = useMemo(() => {
     const map = {
-      cash: { label: "เงินสด", paid: 0, unpaid: 0, count: 0 },
-      promptpay: { label: "โอน/พร้อมเพย์", paid: 0, unpaid: 0, count: 0 },
-      card: { label: "บัตร", paid: 0, unpaid: 0, count: 0 },
+      cash: { label: "เงินสด", amount: 0, count: 0 },
+      promptpay: { label: "โอน/พร้อมเพย์", amount: 0, count: 0 },
     };
     sold.forEach((o) => {
-      const key = o.paymentMethod === "cash" ? "cash" : o.paymentMethod === "card" ? "card" : "promptpay";
-      const amount = calcOrderTotal(o);
+      const key = o.paymentMethod === "cash" ? "cash" : "promptpay";
       map[key].count += 1;
-      if (orderIsPaid(o)) map[key].paid += amount;
-      else map[key].unpaid += amount;
+      map[key].amount += calcOrderTotal(o);
     });
     return map;
   }, [sold]);
-
-  // ยอดที่เก็บเงินแล้ว vs ยังไม่ได้เก็บ — ยอดขายรวม (totalRevenue) ยังนับทุกออร์เดอร์ที่ขายได้
-  // (ออร์เดอร์ที่ยังไม่จ่ายก็ถือว่าขายได้แล้ว แต่เงินยังไม่ได้เข้าร้าน)
-  const paidRevenue = sold.reduce((s, o) => s + (orderIsPaid(o) ? calcOrderTotal(o) : 0), 0);
-  const unpaidRevenue = totalRevenue - paidRevenue;
 
   // กำไร/ขาดทุนต่อเมนู (เมนูที่มีการขายในช่วง) — ต้นทุนรวมท็อปปิ้ง/แอดออนด้วย (ใช้ costOfItem)
   // บวกนับตัวเลือกเสริมที่ลูกค้าเลือก (เช่น เพิ่มไข่มุกกี่ครั้ง) — จากหน้า "ยอดขาย" เดิมที่รวบมา
@@ -6260,12 +6242,8 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     rows.push(["รายจ่ายรวม (บาท)", totalExpense]);
     rows.push(["กำไรสุทธิ (บาท)", netProfit]);
     rows.push([]);
-    rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "จ่ายแล้ว (บาท)", "ยังไม่จ่าย (บาท)", "ยอดรวม (บาท)"]);
-    Object.values(payStats).forEach((p) => rows.push([p.label, p.count, p.paid, p.unpaid, p.paid + p.unpaid]));
-    rows.push([]);
-    rows.push(["สถานะการจ่ายเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
-    rows.push(["จ่ายแล้ว", sold.filter((o) => orderIsPaid(o)).length, paidRevenue]);
-    rows.push(["ยังไม่จ่าย", sold.filter((o) => !orderIsPaid(o)).length, unpaidRevenue]);
+    rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
+    Object.values(payStats).forEach((p) => rows.push([p.label, p.count, p.amount]));
     rows.push([]);
     rows.push(["กำไรต่อเมนู", "ชิ้นที่ขาย", "รายได้ (บาท)", "ต้นทุน (บาท)", "กำไร (บาท)"]);
     menuProfit.forEach((m) => rows.push([m.name, m.qty, m.revenue, m.cost, m.revenue - m.cost]));
@@ -6317,7 +6295,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   // ส่งออกออร์เดอร์ทั้งหมด (จากหน้า "ยอดขาย" เดิม) — รายละเอียดทีละออร์เดอร์ + สถานะจ่ายเงิน
   const exportOrders = () => {
     const rows = [
-      ["เลขออร์เดอร์", "วันที่สั่ง", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "ส่วนลด (บาท)", "วิธีชำระเงิน", "จ่ายเงิน", "สถานะ"],
+      ["เลขออร์เดอร์", "วันที่สั่ง", "ชื่อลูกค้า", "วิธีรับ", "รายการ", "ยอดรวม (บาท)", "ส่วนลด (บาท)", "วิธีชำระเงิน", "สถานะ"],
       ...sold.map((o) => [
         o.orderNo,
         new Date(o.createdAt).toLocaleString("th-TH"),
@@ -6326,8 +6304,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         formatItems(o),
         calcOrderTotal(o),
         (o.discount && o.discount.baht) || 0,
-        o.paymentMethod === "cash" ? "เงินสด" : o.paymentMethod === "promptpay" ? "พร้อมเพย์" : "บัตร",
-        orderIsPaid(o) ? "จ่ายแล้ว" : "ยังไม่จ่าย",
+        o.paymentMethod === "cash" ? "เงินสด" : "พร้อมเพย์",
         o.status,
       ]),
     ];
@@ -6358,7 +6335,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         บัญชีร้าน
       </h1>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-        กำไร/ขาดทุนจากยอดขายจริง ลบต้นทุนวัตถุดิบและรายจ่าย — ไม่รวมออร์เดอร์ที่ยกเลิก
+        กำไร/ขาดทุนจากยอดขายที่เก็บเงินได้แล้ว ลบต้นทุนวัตถุดิบและรายจ่าย — ไม่รวมออร์เดอร์ที่ยกเลิกและที่ยังไม่จ่าย
       </p>
 
       {/* ตัวเลือกช่วงเวลา */}
@@ -6482,12 +6459,6 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                 <span style={{ color: COLORS.inkSoft }}>ยอดขายเงินสดในรอบ (เก็บแล้ว)</span>
                 <span style={{ color: COLORS.sage }} className="font-semibold">+฿{cashSalesInRound}</span>
               </div>
-              {unpaidCashInRound > 0 && (
-                <div className="flex items-center justify-between text-xs">
-                  <span style={{ color: COLORS.inkSoft }}>ออร์เดอร์เงินสดที่ยังไม่เก็บ</span>
-                  <span style={{ color: "#C0533F" }} className="font-semibold">-฿{unpaidCashInRound}</span>
-                </div>
-              )}
               <div className="flex items-center justify-between text-xs">
                 <span style={{ color: COLORS.inkSoft }}>เงินที่ควรมีตอนนี้</span>
                 <span style={{ color: COLORS.ink }} className="font-bold">฿{roundExpected(activeRound.entries)}</span>
@@ -6613,13 +6584,8 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       {/* การ์ดสรุปกำไร/ขาดทุน */}
       <div className="grid grid-cols-2 gap-2 mb-4">
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
-          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ยอดขาย (หลังหักส่วนลด)</p>
+          <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ยอดขาย (เก็บเงินได้แล้ว)</p>
           <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
-          <p className="text-[10px] mt-1 leading-relaxed">
-            <span style={{ color: COLORS.sage }} className="font-semibold">จ่ายแล้ว ฿{paidRevenue.toLocaleString()}</span>
-            {" · "}
-            <span style={{ color: "#C0533F" }} className="font-semibold">ยังไม่จ่าย ฿{unpaidRevenue.toLocaleString()}</span>
-          </p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ต้นทุนวัตถุดิบ (ขายแล้ว)</p>
@@ -6667,13 +6633,8 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       <div className="grid grid-cols-3 gap-2 mb-5">
         {Object.values(payStats).map((p) => (
           <div key={p.label} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{(p.paid + p.unpaid).toLocaleString()}</p>
+            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{p.amount.toLocaleString()}</p>
             <p style={{ color: COLORS.inkSoft }} className="text-[11px]">{p.label} · {p.count} ออเดอร์</p>
-            <p className="text-[10px] mt-1 leading-relaxed">
-              <span style={{ color: COLORS.sage }} className="font-semibold">จ่ายแล้ว ฿{p.paid.toLocaleString()}</span>
-              <br />
-              <span style={{ color: "#C0533F" }} className="font-semibold">ยังไม่จ่าย ฿{p.unpaid.toLocaleString()}</span>
-            </p>
           </div>
         ))}
       </div>
