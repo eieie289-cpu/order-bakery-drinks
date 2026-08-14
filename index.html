@@ -3768,7 +3768,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
             {c.label}
           </p>
-          <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
+          <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0 xl:grid-cols-3 2xl:grid-cols-4">
             {items.map((item) => (
               <div
                 key={item.id}
@@ -4443,7 +4443,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       )}
 
-      <div className="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+      <div className="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0 xl:grid-cols-3">
         {sorted.map((order) => {
           const meta = statusMeta[order.status];
           // ออร์เดอร์จัดส่งที่ทำเสร็จแล้วกำลังรออยู่ในคิวจัดส่ง — ระบุให้พนักงานเห็นชัดเจน
@@ -5195,7 +5195,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">รับที่ร้าน</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({pickups.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{pickups.map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0 xl:grid-cols-3">{pickups.map(renderCard)}</div>
         </div>
       )}
 
@@ -5206,7 +5206,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">{formatDeliveryDateLabel(dateK)}</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({groupsByDate[dateK].length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{groupsByDate[dateK].map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0 xl:grid-cols-3">{groupsByDate[dateK].map(renderCard)}</div>
         </div>
       ))}
 
@@ -5216,7 +5216,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.inkSoft }} className="text-sm font-bold">ส่งตอนนี้ / ไม่ระบุเวลา</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({unscheduled.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{unscheduled.map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0 xl:grid-cols-3">{unscheduled.map(renderCard)}</div>
         </div>
       )}
 
@@ -5691,7 +5691,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
         </div>
       )}
 
-      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">
+      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0 xl:grid-cols-3 2xl:grid-cols-4">
         {promos.map((p) => {
           // จำนวนการใช้โค้ด — อ่านจากฟิลด์ usage (ใหม่) หรือ uses เดิมในตัวโปรโมชั่น (ข้อมูลเก่า)
           const promoUsesCount = Number((p._usage && p._usage.uses) || p.uses) || 0;
@@ -6416,7 +6416,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
       <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
         เครื่องที่ได้รับสิทธิ์ ({staffMembers.length})
       </p>
-      <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
+      <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0 xl:grid-cols-3 2xl:grid-cols-4">
         {staffMembers.length === 0 && (
           <p style={{ color: COLORS.inkSoft }} className="text-xs px-1">
             กำลังโหลดรายชื่อ... (ถ้าไม่ขึ้น ให้ตรวจว่าเครื่องนี้ถูกเพิ่มสิทธิ์ใน Firebase แล้ว)
@@ -6621,7 +6621,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
         </div>
       )}
 
-      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">
+      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0 xl:grid-cols-3 2xl:grid-cols-4">
         {stockItems.map((s) => {
           const st = statusOf(s);
           const usedIn = stockUsage.get(s.id) || [];
@@ -8645,7 +8645,7 @@ function App() {
           ส่วนปุ่มตั้งค่าซิงค์ เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ */}
       {staffUnlocked && !anyModalOpen && (
         <>
-          <div className={`w-full ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-5xl"} sticky top-0 z-30 px-3 pt-3`}>
+          <div className={`w-full ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-none"} sticky top-0 z-30 px-3 pt-3`}>
             <div
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
               className="rounded-2xl p-1 shadow-sm flex items-center gap-1"
@@ -8727,7 +8727,7 @@ function App() {
         </>
       )}
 
-      <div className={`w-full flex-1 ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-5xl"}`}>
+      <div className={`w-full flex-1 ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-none"}`}>
         {role === "customer" && customerStage === "menu" && (
           <CustomerView
             menu={menu}
