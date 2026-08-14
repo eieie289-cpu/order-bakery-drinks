@@ -900,6 +900,7 @@ function PaymentStatusBadge({ order, onMarkPaid, onUnmarkPaid }) {
         </button>
         {confirmRevert && onUnmarkPaid && (
           <div className="fixed inset-0 z-40 flex items-center justify-center px-8">
+            <SheetLock />
             <div onClick={() => setConfirmRevert(false)} className="absolute inset-0 bg-black/30" />
             <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
               <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ย้อนกลับเป็นยังไม่จ่าย?</p>
@@ -961,6 +962,7 @@ function ImageLightbox({ src, onClose }) {
       style={{ background: "rgba(20,14,8,0.9)" }}
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
     >
+      <SheetLock />
       <button
         onClick={onClose}
         style={{ background: "rgba(255,255,255,0.15)", color: "#FFF9F0" }}
@@ -1190,6 +1192,21 @@ function PrimaryButton({ children, onClick, disabled, full, style }) {
       {children}
     </button>
   );
+}
+
+// ล็อกการเลื่อนหน้าข้างหลังเมื่อมีชีต/ฟอร์ม/ป็อปอัพเปิดอยู่ — บน iPad/จอใหญ่ scroll จะได้ไม่ไหลไปโดนหน้าเมนูข้างหลัง
+function SheetLock() {
+  useEffect(() => {
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+    };
+  }, []);
+  return null;
 }
 
 // ================= CUSTOMER VIEW =================
@@ -1569,9 +1586,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
       {detailFor && (() => {
         const dInCart = cart.find((c) => c.cartId === detailFor.id);
         return (
-          <div className="fixed inset-0 z-40 flex flex-col justify-end">
-            <div onClick={() => setDetailFor(null)} className="absolute inset-0 bg-black/30" />
-            <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+          <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+            <SheetLock />
+            <div style={{ overflowY: "auto", overscrollBehavior: "contain" }} className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8">
               <div className="flex items-center justify-between mb-3">
                 <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">{detailFor.name}</h2>
                 <button onClick={() => setDetailFor(null)} style={{ color: COLORS.inkSoft }}>
@@ -1611,6 +1628,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
       {/* ดูรูปเมนูใหญ่ (lightbox) — แตะที่รูปเมนูเพื่อเปิด */}
       {zoomImg && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75" onClick={() => setZoomImg(null)}>
+          <SheetLock />
           <img src={zoomImg} alt="" className="max-w-[92vw] max-h-[85vh] rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
           <button onClick={() => setZoomImg(null)} style={{ position: "absolute", top: 16, right: 16, color: "#FFF", background: "rgba(0,0,0,0.4)" }} className="w-10 h-10 rounded-full flex items-center justify-center">
             <X size={22} />
@@ -1631,9 +1649,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           (g) => g.required && !(g.options || []).some((o) => selectedAddOnKeys.includes(`${g.id}::${o.id}`))
         );
         return (
-          <div className="fixed inset-0 z-40 flex flex-col justify-end">
-            <div onClick={closeAddOnSheet} className="absolute inset-0 bg-black/30" />
-            <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+          <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+            <SheetLock />
+            <div style={{ overflowY: "auto", overscrollBehavior: "contain" }} className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8">
               <div className="flex items-center justify-between mb-1">
                 <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                   {addOnSheetFor.name}
@@ -1758,6 +1776,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
       {/* Cart — เต็มจอ (เหมือนหน้าชำระเงิน) กันหน้าเมนูข้างหลังเลื่อนตาม */}
       {showCart && (
         <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
           <div className="px-5 pt-6 pb-2 flex-shrink-0">
             <button onClick={() => setShowCart(false)} style={{ color: COLORS.inkSoft }} className="flex items-center gap-1 text-sm mb-3">
               <ArrowLeft size={16} /> กลับไปสั่งเพิ่ม
@@ -2835,6 +2854,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
           className="flex flex-col items-center justify-center p-5"
           onClick={() => setReceiptImg(null)}
         >
+          <SheetLock />
           <div className="w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
             <div style={{ background: "#FFFFFF", borderRadius: 20, padding: 14 }} className="max-h-[62vh] overflow-auto">
               <img src={receiptImg} alt="หลักฐานออร์เดอร์" style={{ width: "100%", borderRadius: 10, display: "block" }} />
@@ -3748,7 +3768,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
           <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
             {c.label}
           </p>
-          <div className="space-y-2">
+          <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
             {items.map((item) => (
               <div
                 key={item.id}
@@ -3843,9 +3863,9 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 
       {/* แก้ไขหมวด (แตะที่แถวหมวด) — เปลี่ยนชื่อ + ลบหมวด */}
       {editingCat && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setEditingCat(null)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream, maxHeight: "60vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          <div style={{ overflowY: "auto", overscrollBehavior: "contain" }} className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">แก้ไขหมวด</h2>
               <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}>
@@ -3886,10 +3906,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 
       {/* Edit/new drawer */}
       {editing && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
-          {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
-          <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          {/* เลื่อนเนื้อหาด้านในเอง — SheetLock ล็อก scroll หน้าข้างหลังไม่ให้ไหลไปโดนบนจอใหญ่ */}
+          <div style={{ overflowY: "auto", overscrollBehavior: "contain" }} className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 {editing === "new" ? "เพิ่มเมนูใหม่" : "แก้ไขเมนู"}
@@ -4423,7 +4443,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
         {sorted.map((order) => {
           const meta = statusMeta[order.status];
           // ออร์เดอร์จัดส่งที่ทำเสร็จแล้วกำลังรออยู่ในคิวจัดส่ง — ระบุให้พนักงานเห็นชัดเจน
@@ -4614,6 +4634,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           style={{ background: "rgba(20,14,8,0.55)" }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
         >
+          <SheetLock />
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ background: "#FFFFFF" }}
@@ -4643,9 +4664,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 
       {/* ชีตติ๊กเลือกออร์เดอร์ที่เสร็จแล้วเพื่อลบทีละรายการ — กันกดลบทั้งก้อนพลาด */}
       {deletePickOpen && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setDeletePickOpen(false)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          <div className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8 flex flex-col">
             <div className="flex items-center justify-between mb-1">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 เลือกออร์เดอร์ที่ต้องการลบ
@@ -4673,7 +4694,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 : "เลือกทั้งหมด"}
             </button>
 
-            <div className="overflow-y-auto space-y-2 pb-3">
+            <div style={{ overscrollBehavior: "contain" }} className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-3">
               {finishedOrders.map((order) => {
                 const checked = deletePickIds.includes(order.id);
                 const total = calcOrderTotal(order);
@@ -4753,6 +4774,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           style={{ background: "rgba(20,14,8,0.55)" }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
         >
+          <SheetLock />
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ background: "#FFFFFF" }}
@@ -4796,6 +4818,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           style={{ background: "rgba(20,14,8,0.55)" }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
         >
+          <SheetLock />
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ background: "#FFFFFF" }}
@@ -4837,9 +4860,9 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
 
       {/* ชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ — ลบเฉพาะที่เลือก กันลบทั้งก้อนพลาด */}
       {deleteCancelPickOpen && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setDeleteCancelPickOpen(false)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream, maxHeight: "80%" }} className="relative rounded-t-[28px] p-5 pb-8 flex flex-col">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          <div className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8 flex flex-col">
             <div className="flex items-center justify-between mb-1">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 เลือกออร์เดอร์ที่ยกเลิกที่ต้องการลบ
@@ -4867,7 +4890,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 : "เลือกทั้งหมด"}
             </button>
 
-            <div className="overflow-y-auto space-y-2 pb-3">
+            <div style={{ overscrollBehavior: "contain" }} className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-3">
               {cancelledOrders.map((order) => {
                 const checked = deleteCancelPickIds.includes(order.id);
                 const total = calcOrderTotal(order);
@@ -4948,6 +4971,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           style={{ background: "rgba(20,14,8,0.55)" }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
         >
+          <SheetLock />
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ background: "#FFFFFF" }}
@@ -5171,7 +5195,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">รับที่ร้าน</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({pickups.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">{pickups.map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{pickups.map(renderCard)}</div>
         </div>
       )}
 
@@ -5182,7 +5206,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.ink }} className="text-sm font-bold">{formatDeliveryDateLabel(dateK)}</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({groupsByDate[dateK].length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">{groupsByDate[dateK].map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{groupsByDate[dateK].map(renderCard)}</div>
         </div>
       ))}
 
@@ -5192,13 +5216,14 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <span style={{ color: COLORS.inkSoft }} className="text-sm font-bold">ส่งตอนนี้ / ไม่ระบุเวลา</span>
             <span style={{ color: COLORS.inkSoft }} className="text-xs">({unscheduled.length} ออร์เดอร์)</span>
           </div>
-          <div className="space-y-2.5">{unscheduled.map(renderCard)}</div>
+          <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">{unscheduled.map(renderCard)}</div>
         </div>
       )}
 
       {/* ป็อปอัพยืนยันย้อนกลับการจัดส่ง — กดปุ่ม "จัดส่งเสร็จแล้ว" ซ้ำอีกครั้งเพื่อยกเลิกการจัดส่งสำเร็จ เผื่อกดผิด */}
       {confirmRevertId && (
         <div className="fixed inset-0 z-40 flex items-center justify-center px-8">
+          <SheetLock />
           <div onClick={() => setConfirmRevertId(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
             <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ย้อนกลับเป็นกำลังจัดส่ง?</p>
@@ -5666,7 +5691,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
         </div>
       )}
 
-      <div className="space-y-2.5">
+      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">
         {promos.map((p) => {
           // จำนวนการใช้โค้ด — อ่านจากฟิลด์ usage (ใหม่) หรือ uses เดิมในตัวโปรโมชั่น (ข้อมูลเก่า)
           const promoUsesCount = Number((p._usage && p._usage.uses) || p.uses) || 0;
@@ -5711,6 +5736,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       {/* ยืนยันลบ */}
       {confirmDelete && (
         <div className="fixed inset-0 z-40 flex items-center justify-center px-8">
+          <SheetLock />
           <div onClick={() => setConfirmDelete(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
             <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ลบโปรโมชั่นนี้เลยไหม?</p>
@@ -5735,12 +5761,12 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 
       {/* ฟอร์มเพิ่ม/แก้ไข — ตัวต่อโปรโมชั่น */}
       {editing && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
-          {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          {/* เลื่อนเนื้อหาด้านในเอง — SheetLock ล็อก scroll หน้าข้างหลังไม่ให้ไหลไปโดนบนจอใหญ่ */}
           <div
-            style={{ background: COLORS.cream, maxHeight: "88vh", overflowY: "auto", overscrollBehavior: "contain" }}
-            className="relative rounded-t-[28px] p-5 pb-8"
+            style={{ overflowY: "auto", overscrollBehavior: "contain" }}
+            className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8"
           >
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
@@ -6390,7 +6416,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
       <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold uppercase tracking-wide mb-2 px-1">
         เครื่องที่ได้รับสิทธิ์ ({staffMembers.length})
       </p>
-      <div className="space-y-2">
+      <div className="space-y-2 md:grid md:grid-cols-2 md:gap-2 md:space-y-0">
         {staffMembers.length === 0 && (
           <p style={{ color: COLORS.inkSoft }} className="text-xs px-1">
             กำลังโหลดรายชื่อ... (ถ้าไม่ขึ้น ให้ตรวจว่าเครื่องนี้ถูกเพิ่มสิทธิ์ใน Firebase แล้ว)
@@ -6461,6 +6487,7 @@ function StaffMembersView({ uid, staffMembers, onAdd, onRemove, onRename }) {
       {/* ยืนยันลบสิทธิ์ */}
       {confirmRemove && (
         <div className="fixed inset-0 z-40 flex items-center justify-center px-8">
+          <SheetLock />
           <div onClick={() => setConfirmRemove(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
             <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ลบสิทธิ์เครื่องนี้เลยไหม?</p>
@@ -6594,7 +6621,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
         </div>
       )}
 
-      <div className="space-y-2.5">
+      <div className="space-y-2.5 md:grid md:grid-cols-2 md:gap-2.5 md:space-y-0">
         {stockItems.map((s) => {
           const st = statusOf(s);
           const usedIn = stockUsage.get(s.id) || [];
@@ -6644,6 +6671,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
       {/* ยืนยันลบ */}
       {confirmDeleteId && (
         <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <SheetLock />
           <div onClick={() => setConfirmDeleteId(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-2">ลบรายการสต็อกนี้?</p>
@@ -6662,9 +6690,9 @@ function StaffStockView({ stockItems, updateStock, menu }) {
 
       {/* Drawer เพิ่ม/แก้ไขสต็อก */}
       {editing && (
-        <div className="fixed inset-0 z-40 flex flex-col justify-end">
-          <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
-          <div style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }} className="relative rounded-t-[28px] p-5 pb-8">
+        <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+          <SheetLock />
+          <div style={{ overflowY: "auto", overscrollBehavior: "contain" }} className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8">
             <div className="flex items-center justify-between mb-4">
               <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
                 {editing === "new" ? "เพิ่มวัตถุดิบ" : "แก้ไขวัตถุดิบ"}
@@ -7508,6 +7536,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       {/* ยืนยันลบรายจ่าย */}
       {confirmDeleteExpense && (
         <div className="fixed inset-0 z-40 flex items-center justify-center p-6">
+          <SheetLock />
           <div onClick={() => setConfirmDeleteExpense(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: COLORS.cream }} className="relative rounded-2xl p-5 w-full max-w-xs">
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-4">ลบรายจ่ายรายการนี้?</p>
@@ -8616,7 +8645,7 @@ function App() {
           ส่วนปุ่มตั้งค่าซิงค์ เลื่อนไปกับเนื้อหาปกติ ไม่ลอยค้างกลางจอ */}
       {staffUnlocked && !anyModalOpen && (
         <>
-          <div className="w-full max-w-md sticky top-0 z-30 px-3 pt-3">
+          <div className={`w-full ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-5xl"} sticky top-0 z-30 px-3 pt-3`}>
             <div
               style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
               className="rounded-2xl p-1 shadow-sm flex items-center gap-1"
@@ -8698,7 +8727,7 @@ function App() {
         </>
       )}
 
-      <div className="w-full max-w-md flex-1">
+      <div className={`w-full flex-1 ${role === "customer" ? "max-w-md" : "max-w-md md:max-w-5xl"}`}>
         {role === "customer" && customerStage === "menu" && (
           <CustomerView
             menu={menu}
