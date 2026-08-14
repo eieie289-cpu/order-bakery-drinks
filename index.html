@@ -491,10 +491,14 @@ const discountBahtFor = (itemId, promos) =>
     .map((p) => Number(p.discountBaht) || 0));
 
 // ราคาเมนูหลังหักส่วนลด (หัก % ก่อน แล้วค่อยหักบาท — ปัดเป็นสตางค์)
+// รวมทั้งโปรเก่า (type=discount) และโปรตัวต่อ (rules — หักเฉพาะแบบหน่วยที่เช็คเงื่อนไขเวลา/วันได้)
 const effectiveItemPrice = (item, promos) => {
   if (!item) return 0;
-  const pct = discountPercentFor(item.id, promos);
-  const baht = discountBahtFor(item.id, promos);
+  let pct = discountPercentFor(item.id, promos);
+  let baht = discountBahtFor(item.id, promos);
+  const ru = ruleUnitDiscountFor(item.id, promos, Date.now());
+  pct = Math.max(pct, ru.pct);
+  baht = Math.max(baht, ru.baht);
   let price = item.price;
   if (pct > 0) price = Math.round(price * (100 - pct)) / 100;
   if (baht > 0) price = Math.max(0, Math.round((price - baht) * 100) / 100);
@@ -504,35 +508,261 @@ const effectiveItemPrice = (item, promos) => {
 // ป้ายส่วนลดบนการ์ดเมนู เช่น "-10%" หรือ "-฿5" (ถ้ามีทั้งสองอย่างแสดงรวมกัน)
 const discountLabelFor = (item, promos) => {
   if (!item) return "";
-  const pct = discountPercentFor(item.id, promos);
-  const baht = discountBahtFor(item.id, promos);
+  let pct = discountPercentFor(item.id, promos);
+  let baht = discountBahtFor(item.id, promos);
+  const ru = ruleUnitDiscountFor(item.id, promos, Date.now());
+  pct = Math.max(pct, ru.pct);
+  baht = Math.max(baht, ru.baht);
   if (pct > 0 && baht > 0) return `-${pct}% -฿${baht}`;
   if (pct > 0) return `-${pct}%`;
   if (baht > 0) return `-฿${baht}`;
   return "";
 };
 
-// ตัวเลือกเพิ่มนี้ฟรีไหม (โปรโมชั่นท็อปปิ้งฟรีที่เปิดใช้ + ตรงกับเมนู)
+// ตัวเลือกเพิ่มนี้ฟรีไหม (โปรเก่า freeAddOn + โปรตัวต่อแบบท็อปปิ้งฟรี — ตรงกับเมนู)
 const isAddOnFree = (itemId, optionId, promos) =>
   (promos || []).some(
     (p) =>
       p && p.active && p.type === "freeAddOn" &&
       (!p.itemIds || p.itemIds.length === 0 || p.itemIds.includes(itemId)) &&
       (p.addOnIds || []).includes(optionId)
-  );
+  ) || ruleIsAddOnFree(itemId, optionId, promos, Date.now());
 
 const effectiveAddOnPrice = (itemId, option, promos) =>
   isAddOnFree(itemId, option && option.id, promos) ? 0 : Number((option && option.price) || 0);
 
-// หาโค้ดส่วนลดที่เปิดใช้และตรงกับที่กรอก (ไม่สนตัวพิมพ์เล็ก-ใหญ่)
+// ================= โปรโมชั่นแบบตัวต่อ (rule-based) =================
+// โปรใหม่เก็บในฟิลด์ rules: { conds:[], code, minSpendTiers:[{min,amount}], minQtyTiers:[],
+//   containsIds:[], timeFrom, timeTo, days:[], pickupOnly, target:"all|items|addons|cart",
+//   targetIds:[], addonIds:[], addonMenuScope:"all|some", addonMenuIds:[],
+//   action:"percent|baht|free|bogo|nth|combo", actionAmount, actionUnit:"percent|baht",
+//   actionN, comboIds:[], comboMode:"price|percent|baht", limitMax }
+// โปรเก่า (type: discount/freeAddOn/code/byoc/threshold) ยังใช้โค้ดเดิมไม่ถูกแตะ —
+// เวลาเปิดแก้จะแปลงเป็นฟอร์มตัวต่อ และเมื่อบันทึกจะกลายเป็นโปรแบบ rules
+
+// ขั้นที่ผ่านสูงสุดของขั้นบันได (เช่น ฿200→฿20 / ฿400→฿50 — ยอด 350 ได้ขั้น ฿200)
+const bestTier = (tiers, value) => {
+  const list = (tiers || []).filter((x) => x && value >= (Number(x.min) || 0));
+  if (!list.length) return null;
+  return list.reduce((a, b) => (Number(a.min) > Number(b.min) ? a : b));
+};
+// เงื่อนไข "เฉพาะช่วงเวลา" เช่น 14:00–17:00
+const ruleTimeMatches = (r, now) => {
+  if (!r.conds || !r.conds.includes("time")) return true;
+  const d = new Date(now);
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return (!r.timeFrom || hm >= r.timeFrom) && (!r.timeTo || hm <= r.timeTo);
+};
+// เงื่อนไข "เฉพาะวัน" (0 = อาทิตย์ … 6 = เสาร์)
+const ruleDayMatches = (r, now) => {
+  if (!r.conds || !r.conds.includes("days")) return true;
+  const d = new Date(now);
+  return !r.days || r.days.length === 0 || r.days.includes(d.getDay());
+};
+// เงื่อนไขที่เช็คได้เฉพาะเมื่อมีตะกร้า/วิธีรับ/โค้ด/แก้ว — ใช้ในหน้าชำระเงิน
+const ruleCartConditionsMet = (r, ctx) => {
+  const conds = r.conds || [];
+  if (conds.includes("code") && String((ctx && ctx.code) || "").trim().toUpperCase() !== String(r.code || "").trim().toUpperCase()) return false;
+  if (conds.includes("pickup") && (ctx && ctx.deliveryMethod) !== "pickup") return false;
+  if (conds.includes("byoc")) {
+    if (!(ctx && ctx.bringCup)) return false;
+    if (r.pickupOnly !== false && (ctx && ctx.deliveryMethod) !== "pickup") return false;
+  }
+  const cart = (ctx && ctx.cart) || [];
+  if (conds.includes("contains") && (r.containsIds || []).length) {
+    const inCart = new Set(cart.map((c) => c.menuId));
+    if (!r.containsIds.every((id) => inCart.has(id))) return false;
+  }
+  const subtotal = (ctx && ctx.subtotal) || 0;
+  if (conds.includes("minSpend") && !bestTier(r.minSpendTiers, subtotal)) return false;
+  if (conds.includes("minQty")) {
+    const totalQty = cart.reduce((s, c) => s + (Number(c.qty) || 0), 0);
+    if (!bestTier(r.minQtyTiers, totalQty)) return false;
+  }
+  return true;
+};
+// เงื่อนไขที่อิสระจากตะกร้า (เวลา/วัน) — เช็คได้ที่หน้าเมนู
+const ruleMenuConditionsMet = (r, now) => ruleTimeMatches(r, now) && ruleDayMatches(r, now);
+// โปรแบบนี้หักราคาหน่วยตอนเพิ่มลงตะกร้าแล้ว (หน้าเมนู) — ต้องไม่หักซ้ำที่หน้าชำระเงิน
+const ruleIsUnitLevel = (r) => {
+  const simpleConds = !(r.conds || []).some((c) => ["code", "pickup", "byoc", "minSpend", "minQty", "contains"].includes(c));
+  if (!simpleConds) return false;
+  if ((r.target === "all" || r.target === "items") && (r.action === "percent" || r.action === "baht")) return true;
+  if (r.target === "addons" && r.action === "free") return true;
+  return false;
+};
+// ส่วนลดหน่วยของโปรตัวต่อ (หน้าเมนู + ตอนเพิ่มลงตะกร้า) — ใช้สูงสุดของทุกโปรที่ตรง
+const ruleUnitDiscountFor = (itemId, promos, now) => {
+  let pct = 0;
+  let baht = 0;
+  (promos || []).forEach((p) => {
+    if (!p || !p.active || !p.rules) return;
+    const r = p.rules;
+    if (r.target !== "all" && r.target !== "items") return;
+    if (r.action !== "percent" && r.action !== "baht") return;
+    if (!ruleIsUnitLevel(r) || !ruleMenuConditionsMet(r, now)) return;
+    if (r.target === "items" && !(r.targetIds || []).includes(itemId)) return;
+    if (r.action === "percent") pct = Math.max(pct, Number(r.actionAmount) || 0);
+    else baht = Math.max(baht, Number(r.actionAmount) || 0);
+  });
+  return { pct, baht };
+};
+// ท็อปปิ้งนี้ฟรีไหมจากโปรตัวต่อ (หน้าเมนู + ตอนเพิ่มลงตะกร้า)
+const ruleIsAddOnFree = (itemId, optionId, promos, now) =>
+  (promos || []).some((p) => {
+    if (!p || !p.active || !p.rules) return false;
+    const r = p.rules;
+    if (r.target !== "addons" || r.action !== "free") return false;
+    if (!ruleIsUnitLevel(r) || !ruleMenuConditionsMet(r, now)) return false;
+    if (r.addonMenuScope === "some" && !(r.addonMenuIds || []).includes(itemId)) return false;
+    return (r.addonIds || []).includes(optionId);
+  });
+const ruleAmtText = (amount, isPct) => (isPct ? ` ${amount}%` : ` ฿${amount}`);
+// ส่วนลดตะกร้า (หน้าชำระเงิน) — โปรตัวต่อทุกแบบที่ไม่ได้หักราคาหน่วยไว้
+// คืน { baht, label, promoId } — baht หักจากยอดรวม, label ไว้โชว์สรุป, promoId ไว้กดนับการใช้โค้ด
+const computeRuleCartDiscount = (cart, promos, ctx) => {
+  const now = (ctx && ctx.now) || Date.now();
+  const subtotal = (ctx && ctx.subtotal) || 0;
+  const cartQty = cart.reduce((s, c) => s + (Number(c.qty) || 0), 0);
+  let totalBaht = 0;
+  const labels = [];
+  let promoId = "";
+  (promos || []).forEach((p) => {
+    if (!p || !p.active || !p.rules) return;
+    const r = p.rules;
+    if (!ruleTimeMatches(r, now) || !ruleDayMatches(r, now)) return;
+    if (ruleIsUnitLevel(r)) return; // หักไปแล้วตอนเพิ่มลงตะกร้า — กันหักซ้ำ
+    if (!ruleCartConditionsMet(r, ctx)) return;
+    let baht = 0;
+    let label = "";
+    if (r.target === "cart") {
+      if (r.conds.includes("minSpend") && (r.minSpendTiers || []).length) {
+        const tier = bestTier(r.minSpendTiers, subtotal);
+        baht = Number((tier && tier.amount) || 0);
+        label = `ซื้อครบลด ${ruleAmtText(baht, false)}`;
+      } else if (r.conds.includes("minQty") && (r.minQtyTiers || []).length) {
+        const tier = bestTier(r.minQtyTiers, cartQty);
+        baht = Number((tier && tier.amount) || 0);
+        label = `ซื้อครบ ${tier ? tier.min : ""} ชิ้น ลด ${ruleAmtText(baht, false)}`;
+      } else if (r.action === "percent") {
+        baht = Math.round(subtotal * (Number(r.actionAmount) || 0)) / 100;
+        label = `ลด ${ruleAmtText(Number(r.actionAmount) || 0, true)}`;
+      } else {
+        baht = Number(r.actionAmount) || 0;
+        label = `ลด ${ruleAmtText(baht, false)}`;
+      }
+      baht = Math.min(baht, subtotal);
+    } else if (r.target === "items" || r.target === "all") {
+      const targets = cart.filter((c) => r.target === "all" || (r.targetIds || []).includes(c.menuId));
+      if (r.action === "percent" || r.action === "baht") {
+        // ส่วนลด %/บาท เฉพาะเมนูที่เลือก แต่มีเงื่อนไขตะกร้า (เช่น ต้องมีเมนู X ในตะกร้า / ซื้อครบ) —
+        // ยังไม่ได้หักตอนเพิ่มลงตะกร้า (ruleIsUnitLevel ข้ามไว้) ต้องคิดที่นี่
+        // หมายเหตุ: c.price คือราคาต่อหน่วยอยู่แล้ว (ราคาหน่วยหลังหักโปรตอนเพิ่มลงตะกร้า) — อย่าหารด้วย qty
+        targets.forEach((c) => {
+          const unit = c.price;
+          const d = r.action === "percent" ? Math.round(unit * (Number(r.actionAmount) || 0)) / 100 : Math.min(Number(r.actionAmount) || 0, unit);
+          baht += Math.round(d * (Number(c.qty) || 1) * 100) / 100;
+        });
+        label = `ลด${ruleAmtText(Number(r.actionAmount) || 0, r.action === "percent")}`;
+      } else if (r.action === "bogo") {
+        const X = Math.max(1, Number(r.actionAmount) || 2);
+        let cnt = 0;
+        targets.forEach((c) => {
+          const unit = c.price;
+          let freeUnits = Math.floor((Number(c.qty) || 0) / X);
+          if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
+          if (freeUnits > 0) {
+            baht += Math.round(freeUnits * unit * 100) / 100;
+            cnt += freeUnits;
+          }
+        });
+        label = `1แถม1 (ฟรี ${cnt} ชิ้น)`;
+      } else if (r.action === "nth") {
+        const N = Math.max(1, Number(r.actionN) || 2);
+        let cnt = 0;
+        targets.forEach((c) => {
+          const unit = c.price;
+          if ((Number(c.qty) || 0) < N) return;
+          if (Number(r.limitMax) > 0 && cnt >= Number(r.limitMax)) return;
+          const d = r.actionUnit === "baht" ? Math.min(Number(r.actionAmount) || 0, unit) : Math.round(unit * (Number(r.actionAmount) || 0)) / 100;
+          baht += Math.round(d * 100) / 100;
+          cnt += 1;
+        });
+        label = `ชิ้นที่ ${N} ลด${ruleAmtText(Number(r.actionAmount) || 0, r.actionUnit === "percent")}`;
+      } else if (r.action === "free") {
+        let cnt = 0;
+        targets.forEach((c) => {
+          const unit = c.price;
+          let freeUnits = 1;
+          if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
+          if (freeUnits > 0) {
+            baht += Math.round(freeUnits * unit * 100) / 100;
+            cnt += freeUnits;
+          }
+        });
+        label = `ของแถมฟรี ${cnt} ชิ้น`;
+      } else if (r.action === "combo" && (r.comboIds || []).length >= 2) {
+        const setIds = r.comboIds;
+        const qtyPer = setIds.map((id) => {
+          const c = cart.find((x) => x.menuId === id);
+          return c ? Number(c.qty) || 0 : 0;
+        });
+        const numSets = Math.min(...qtyPer);
+        if (numSets > 0) {
+          const fullPrice = setIds.reduce((s, id) => {
+            const c = cart.find((x) => x.menuId === id);
+            return s + (c ? c.price : 0);
+          }, 0);
+          let perSet = 0;
+          if (r.comboMode === "price") perSet = fullPrice - (Number(r.actionAmount) || 0);
+          else if (r.comboMode === "percent") perSet = Math.round(fullPrice * (Number(r.actionAmount) || 0)) / 100;
+          else perSet = Number(r.actionAmount) || 0;
+          perSet = Math.max(0, Math.min(perSet, fullPrice));
+          baht = Math.round(perSet * numSets * 100) / 100;
+          label = `ราคารวมชุด (${numSets} ชุด)`;
+        }
+      }
+      baht = Math.min(baht, subtotal);
+    } else if (r.target === "addons") {
+      // ท็อปปิ้งฟรีแบบมีเงื่อนไขตะกร้า (เช่น ซื้อครบแล้วไข่มุกฟรี) — คืนเงินราคา add-on ที่ควรฟรี
+      // (แบบไม่มีเงื่อนไขถูกหักเป็นราคาหน่วยตอนเพิ่มลงตะกร้าแล้ว — ruleIsUnitLevel ข้ามไว้ข้างบน)
+      const freeOptIds = r.addonIds || [];
+      let freeCnt = 0;
+      cart.forEach((c) => {
+        if (r.addonMenuScope === "some" && !(r.addonMenuIds || []).includes(c.menuId)) return;
+        (c.addOns || []).forEach((a) => {
+          if (!freeOptIds.includes(a.id)) return;
+          if (Number(r.limitMax) > 0 && freeCnt >= Number(r.limitMax)) return;
+          baht += Math.round((Number(a.price) || 0) * (Number(c.qty) || 1));
+          freeCnt += 1;
+        });
+      });
+      baht = Math.round(baht * 100) / 100;
+      label = `ท็อปปิ้งฟรี ${freeCnt} รายการ`;
+    }
+    if (baht > 0) {
+      totalBaht += baht;
+      if (label) labels.push(label);
+    }
+    // จด id ของโปรที่ใช้โค้ด (เพื่อนับการใช้ตอนสั่งสำเร็จ) — เฉพาะตัวที่เงื่อนไขโค้ดผ่าน
+    if ((r.conds || []).includes("code") && !promoId) promoId = p.id;
+  });
+  return { baht: Math.round(totalBaht * 100) / 100, label: labels.join(" + "), promoId };
+};
+
+// ข้อความโค้ดของโปรโมชั่น (รองรับทั้งโปรเก่า type:"code" และโปรตัวต่อที่เงื่อนไขมี code)
+const promoCodeText = (p) =>
+  p && p.rules && (p.rules.conds || []).includes("code") ? String(p.rules.code || "") : p && p.type === "code" ? String(p.code || "") : "";
+// % ของโปรโมชั่น (รองรับทั้งโปรเก่าและโปรตัวต่อ — โปรตัวต่อแบบบาท/อื่นๆ คืน 0)
+const promoDiscountPercent = (p) =>
+  p && p.rules
+    ? p.rules.action === "percent" ? Number(p.rules.actionAmount) || 0 : 0
+    : Number(p && p.discountPercent) || 0;
+// หาโค้ดส่วนลดที่เปิดใช้และตรงกับที่กรอก (ไม่สนตัวพิมพ์เล็ก-ใหญ่) — ทั้งโปรเก่าและโปรตัวต่อ
 const findPromoCode = (code, promos) => {
   const c = String(code || "").trim().toUpperCase();
   if (!c) return null;
-  return (
-    (promos || []).find(
-      (p) => p && p.active && p.type === "code" && String(p.code || "").trim().toUpperCase() === c
-    ) || null
-  );
+  return (promos || []).find((p) => p && p.active && String(promoCodeText(p) || "").trim().toUpperCase() === c) || null;
 };
 
 // ยอดรวมออร์เดอร์ (หักส่วนลดโค้ดแล้ว) — ใช้ในหน้าพนักงาน/แดชบอร์ด/ใบหลักฐาน
@@ -1688,7 +1918,16 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const [bringCup, setBringCup] = useState(false); // ลูกค้าติ๊ก "นำแก้วมาเอง" เพื่อรับส่วนลด
   const subtotal = cart.reduce((sum, c) => sum + c.price * c.qty, 0);
   // โปรโมชั่น "นำแก้วมาเอง" ที่เปิดใช้ — ลูกค้าติ๊กในหน้าชำระเงินเพื่อรับส่วนลด
-  const byocPromo = (promos || []).find((p) => p && p.active && p.type === "byoc");
+  // รองรับทั้งโปรเก่า (type: byoc) และโปรตัวต่อ (เงื่อนไข byoc)
+  const byocPromo = (promos || []).find(
+    (p) => p && p.active && (p.type === "byoc" || (p.rules && (p.rules.conds || []).includes("byoc")))
+  );
+  // จำนวนส่วนลดนำแก้วมาเอง (โปรตัวต่ออ่านจาก rules.actionAmount)
+  const byocBahtValue = byocPromo
+    ? byocPromo.rules
+      ? Number(byocPromo.rules.actionAmount) || 0
+      : Number(byocPromo.discountBaht) || 0
+    : 0;
   // ส่วนลดโค้ด (เป็น % หรือบาทก็ได้) + ส่วนลดนำแก้วมาเอง
   const codeBaht = appliedPromo
     ? Number(appliedPromo.discountBaht) > 0
@@ -1697,19 +1936,30 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
     : 0;
   // นำแก้วมาเอง — ปกติใช้ได้เฉพาะรับที่ร้าน (ลูกค้าที่สั่งจัดส่งเอาแก้วไปส่งไม่ได้)
   // แต่พนักงานตั้งได้ว่าให้ใช้ได้ทั้งสองแบบ (pickupOnly = false)
-  const byocPickupOnly = byocPromo ? byocPromo.pickupOnly !== false : true;
-  const byocBaht = bringCup && byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(Number(byocPromo.discountBaht) || 0, subtotal) : 0;
+  const byocPickupOnly = byocPromo ? (byocPromo.rules ? byocPromo.rules.pickupOnly !== false : byocPromo.pickupOnly !== false) : true;
+  const byocBaht = bringCup && byocPromo && (!byocPickupOnly || deliveryMethod === "pickup") ? Math.min(byocBahtValue, subtotal) : 0;
   // โปรโมชั่น "ซื้อครบ" — หักให้อัตโนมัติเมื่อยอดรวมถึงเกณฑ์ (ลูกค้าไม่ต้องทำอะไร)
   const thresholdPromo = (promos || []).find((p) => p && p.active && p.type === "threshold");
   const thresholdMet = !!thresholdPromo && subtotal >= (Number(thresholdPromo.minSpend) || 0);
   const thresholdBaht = thresholdMet ? Math.min(Number(thresholdPromo.discountBaht) || 0, subtotal) : 0;
-  const discountBaht = codeBaht + byocBaht + thresholdBaht;
+  // โปรโมชั่นตัวต่อ (rules) — ส่วนลดระดับตะกร้า (ซื้อครบ/1แถม1/ชิ้นN/ชุด/โค้ด/แก้วมาเอง/ท็อปปิ้งฟรีมีเงื่อนไข)
+  // ที่ยังไม่ได้หักตอนเพิ่มลงตะกร้า — คำนวณจากตะกร้าทั้งใบ + วิธีรับ + โค้ด + ติ๊กแก้วมาเอง
+  const ruleCartDiscount = computeRuleCartDiscount(cart, promos, {
+    deliveryMethod,
+    bringCup,
+    code: promoCode,
+    subtotal,
+    cart,
+    now: Date.now(),
+  });
+  const discountBaht = codeBaht + byocBaht + thresholdBaht + ruleCartDiscount.baht;
   const total = Math.max(0, subtotal - discountBaht);
-  // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5"
+  // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5 + 1แถม1 (ฟรี 1 ชิ้น)"
   const discountSummaryLabel = [
     thresholdBaht > 0 ? "ซื้อครบ" : null,
     byocBaht > 0 ? "นำแก้วมาเอง" : null,
-    appliedPromo ? `โค้ด ${appliedPromo.code}` : null,
+    appliedPromo ? `โค้ด ${promoCodeText(appliedPromo)}` : null,
+    ruleCartDiscount.label || null,
   ]
     .filter(Boolean)
     .join(" + ");
@@ -1745,11 +1995,11 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const getDiscount = () => {
     if (discountBaht <= 0) return null;
     return {
-      code: appliedPromo ? appliedPromo.code : "",
-      percent: appliedPromo ? Number(appliedPromo.discountPercent) || 0 : 0,
+      code: promoCodeText(appliedPromo),
+      percent: promoDiscountPercent(appliedPromo),
       baht: discountBaht,
       label: discountSummaryLabel,
-      promoId: appliedPromo ? appliedPromo.id : "", // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
+      promoId: appliedPromo ? appliedPromo.id : ruleCartDiscount.promoId || "", // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
       perCustomer: appliedPromo ? !!appliedPromo.perCustomer : false, // โค้ดแบบ 1 ครั้ง/คน — ใช้อัปเดต usedBy ตอนสั่งสำเร็จ
     };
   };
@@ -1879,7 +2129,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
                 </span>
                 <span style={{ color: COLORS.ink }} className="text-sm font-medium min-w-0 break-words">{byocPromo.name || "นำแก้วมาเอง"}</span>
               </span>
-              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocPromo.discountBaht}</span>
+              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocBahtValue}</span>
             </button>
           )}
           {byocPromo && byocPickupOnly && deliveryMethod === "delivery" && (
@@ -4983,84 +5233,313 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
 // สรุปยอดขายให้พนักงาน/เจ้าของร้านดูภาพรวม: ยอดขายรวม, ขายเมนูไหนดี,
 // และตัวเลือกเสริม (เช่น แยกน้ำแข็ง/เพิ่มท็อปปิ้ง) ถูกเลือกกี่ครั้ง
 // นับจาก "ออร์เดอร์ที่เข้ามา" ทั้งหมดในช่วงเวลาที่เลือก (ทุกสถานะ ไม่ว่าจะใหม่/กำลังทำ/เสร็จแล้ว)
-// ================= STAFF: จัดการโปรโมชั่น =================
-// ประเภท: discount = ลดราคาเมนู (เป็น % หรือบาท) | freeAddOn = ท็อปปิ้ง/แอดออนฟรี | code = โค้ดส่วนลด (เป็น % หรือบาท) | byoc = นำแก้วมาเอง (ลดเป็นบาท) | threshold = ซื้อครบลด (อัตโนมัติ)
-// โครงสร้าง: { id, name, type, active, discountPercent, discountBaht, minSpend, itemIds ([] = ทุกเมนู), addOnIds, code, maxUses (0 = ไม่จำกัด), perCustomer, uses, usedBy }
+// ================= STAFF: จัดการโปรโมชั่น (ตัวต่อ) =================
+// โปรใหม่เก็บในฟิลด์ rules (โครงสร้างอยู่บนสุดของส่วนโปรโมชั่นตัวต่อ) — โปรเก่า 5 แบบ (type: discount/freeAddOn/code/byoc/threshold)
+// ยังทำงานเหมือนเดิม และเวลาเปิดแก้จะแปลงเป็นฟอร์มตัวต่ออัตโนมัติ เมื่อบันทึกจะกลายเป็นโปรแบบ rules
+
+// ---- ตัวช่วยแปลง/สรุปสำหรับฟอร์มตัวต่อ ----
+// ชื่อเมนูจาก id
+const menuNameById = (menu, id) => {
+  const m = (menu || []).find((x) => x.id === id);
+  return m ? m.name : id;
+};
+// ตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) ทั้งหมดในระบบ — แต่ละตัวเลือก id ไม่ซ้ำข้ามเมนู
+const allAddOnOptions = (menu) => {
+  const out = [];
+  (menu || []).forEach((m) =>
+    (m.addOns || []).forEach((g) =>
+      (g.options || []).forEach((o) => out.push({ menuId: m.id, menuName: m.name, id: o.id, name: o.name, price: Number(o.price) || 0 }))
+    )
+  );
+  return out;
+};
+// ชื่อท็อปปิ้งไม่ซ้ำ (เรียงตามที่เจอ) — ตัวต่อเลือกท็อปปิ้งด้วยชื่อ แล้วกำหนดขอบเขตเมนู
+const uniqueAddOnNames = (menu) => {
+  const names = [];
+  allAddOnOptions(menu).forEach((o) => { if (!names.includes(o.name)) names.push(o.name); });
+  return names;
+};
+// เปลี่ยนชื่อท็อปปิ้งที่เลือก + ขอบเขตเมนู → id ของตัวเลือกจริง (เครื่องคำนวณใช้ id)
+const resolveAddonIds = (names, scope, menuIds, menu) =>
+  allAddOnOptions(menu)
+    .filter((o) => names.includes(o.name) && (scope !== "some" || menuIds.includes(o.menuId)))
+    .map((o) => o.id);
+// โปรเก่า 5 แบบ → โครงสร้าง rules (สำหรับแปลงตอนเปิดแก้ + โชว์การ์ด)
+const promoToRules = (p, menu) => {
+  if (!p) return null;
+  if (p.rules) return p.rules;
+  const r = { conds: [], target: "all", action: "percent", actionAmount: 0, actionUnit: "baht", limitMax: 0 };
+  const isBaht = Number(p.discountBaht) > 0;
+  if (p.type === "discount") {
+    r.target = p.itemIds && p.itemIds.length ? "items" : "all";
+    if (p.itemIds && p.itemIds.length) r.targetIds = [...p.itemIds];
+    r.action = isBaht ? "baht" : "percent";
+    r.actionAmount = isBaht ? Number(p.discountBaht) : Number(p.discountPercent) || 0;
+  } else if (p.type === "freeAddOn") {
+    r.target = "addons";
+    r.action = "free";
+    r.addonIds = [...(p.addOnIds || [])];
+    // ขอบเขตเมนู = เมนูเจ้าของตัวเลือกที่เลือกจริง (กันแปลงแล้วความหมายเพี้ยน)
+    r.addonMenuScope = "some";
+    r.addonMenuIds = [...new Set(allAddOnOptions(menu).filter((o) => (p.addOnIds || []).includes(o.id)).map((o) => o.menuId))];
+  } else if (p.type === "code") {
+    r.conds = ["code"];
+    r.code = String(p.code || "").toUpperCase();
+    r.target = "cart";
+    r.action = isBaht ? "baht" : "percent";
+    r.actionAmount = isBaht ? Number(p.discountBaht) : Number(p.discountPercent) || 0;
+  } else if (p.type === "byoc") {
+    r.conds = ["byoc"];
+    r.target = "cart";
+    r.action = "baht";
+    r.actionAmount = Number(p.discountBaht) || 0;
+    r.pickupOnly = p.pickupOnly !== false;
+  } else if (p.type === "threshold") {
+    r.conds = ["minSpend"];
+    r.minSpendTiers = [{ min: Number(p.minSpend) || 0, amount: Number(p.discountBaht) || 0 }];
+    r.target = "cart";
+    r.action = "baht";
+  }
+  return r;
+};
+// ฟอร์มตัวต่อว่าง (โปรใหม่)
+const emptyBuilderForm = () => ({
+  name: "",
+  active: true,
+  conds: [], // code | minSpend | minQty | contains | pickup | byoc | time | days
+  codeVal: "",
+  spendTiers: [{ t: "", d: "" }],
+  qtyTiers: [{ t: "", d: "" }],
+  containsIds: [],
+  timeFrom: "",
+  timeTo: "",
+  days: [],
+  target: "all", // all | items | addons | cart
+  targetMenuIds: [],
+  addonNames: [],
+  addonScope: "all", // all = ทุกเมนู | some = เฉพาะเมนูที่เลือก
+  addonMenuIds: [],
+  action: "percent", // percent | baht | free | bogo | nth | combo
+  amtVal: "",
+  nthN: "",
+  nthAmt: "",
+  nthUnit: "percent",
+  comboIds: [],
+  comboMode: "price", // price = ชุดละ ฿X | percent | baht
+  comboPrice: "",
+  limitVal: "",
+  pickupOnly: true, // เก็บของโปรนำแก้วมาเองเดิม (ไม่โชว์ในฟอร์ม แต่ไม่ให้หายตอนแก้)
+});
+// rules → ฟอร์มตัวต่อ (เปิดแก้โปรเดิม/โปรตัวต่อ)
+const rulesToBuilderForm = (r, menu) => {
+  const opts = allAddOnOptions(menu);
+  const f = emptyBuilderForm();
+  f.conds = [...((r && r.conds) || [])];
+  f.codeVal = (r && r.code) || "";
+  if (r && r.minSpendTiers && r.minSpendTiers.length) f.spendTiers = r.minSpendTiers.map((x) => ({ t: String(x.min), d: String(x.amount) }));
+  if (r && r.minQtyTiers && r.minQtyTiers.length) f.qtyTiers = r.minQtyTiers.map((x) => ({ t: String(x.min), d: String(x.amount) }));
+  f.containsIds = [...((r && r.containsIds) || [])];
+  f.timeFrom = (r && r.timeFrom) || "";
+  f.timeTo = (r && r.timeTo) || "";
+  f.days = [...((r && r.days) || [])];
+  f.target = (r && r.target) || "all";
+  f.targetMenuIds = [...((r && r.targetIds) || [])];
+  if (r && r.target === "addons") {
+    f.addonNames = [...new Set(opts.filter((o) => (r.addonIds || []).includes(o.id)).map((o) => o.name))];
+    f.addonScope = r.addonMenuScope || "all";
+    f.addonMenuIds = [...((r && r.addonMenuIds) || [])];
+  }
+  f.action = (r && r.action) || "percent";
+  if (r && (r.action === "percent" || r.action === "baht" || r.action === "bogo")) f.amtVal = String(r.actionAmount || "");
+  if (r && r.action === "nth") { f.nthN = String(r.actionN || ""); f.nthAmt = String(r.actionAmount || ""); f.nthUnit = r.actionUnit || "percent"; }
+  if (r && r.action === "combo") { f.comboIds = [...(r.comboIds || [])]; f.comboMode = r.comboMode || "price"; f.comboPrice = String(r.actionAmount || ""); }
+  f.limitVal = r && Number(r.limitMax) > 0 ? String(r.limitMax) : "";
+  f.pickupOnly = !r || r.pickupOnly !== false;
+  return f;
+};
+// ฟอร์มตัวต่อ → โครงสร้าง rules (บันทึก)
+const builderFormToRules = (f, menu) => {
+  const r = {
+    conds: [...f.conds],
+    target: f.target,
+    action: f.action,
+    actionAmount: 0,
+    actionUnit: "baht",
+    limitMax: Number(f.limitVal) > 0 ? Math.max(1, Math.floor(Number(f.limitVal))) : 0,
+    pickupOnly: f.pickupOnly !== false,
+  };
+  if (f.conds.includes("code")) r.code = String(f.codeVal || "").trim().toUpperCase();
+  if (f.conds.includes("minSpend")) r.minSpendTiers = f.spendTiers.filter((x) => Number(x.t) > 0 && Number(x.d) > 0).map((x) => ({ min: Number(x.t), amount: Number(x.d) }));
+  if (f.conds.includes("minQty")) r.minQtyTiers = f.qtyTiers.filter((x) => Number(x.t) > 0 && Number(x.d) > 0).map((x) => ({ min: Number(x.t), amount: Number(x.d) }));
+  if (f.conds.includes("contains")) r.containsIds = [...f.containsIds];
+  if (f.conds.includes("time")) { r.timeFrom = f.timeFrom; r.timeTo = f.timeTo; }
+  if (f.conds.includes("days")) r.days = [...f.days];
+  if (f.target === "items") r.targetIds = [...f.targetMenuIds];
+  if (f.target === "addons") {
+    r.addonMenuScope = f.addonScope;
+    if (f.addonScope === "some") r.addonMenuIds = [...f.addonMenuIds];
+    r.addonIds = resolveAddonIds(f.addonNames, f.addonScope, f.addonMenuIds, menu);
+  }
+  if (f.action === "percent" || f.action === "baht") r.actionAmount = Number(f.amtVal) || 0;
+  if (f.action === "bogo") r.actionAmount = Math.max(2, Math.floor(Number(f.amtVal)) || 2);
+  if (f.action === "nth") { r.actionN = Math.max(2, Math.floor(Number(f.nthN)) || 2); r.actionAmount = Number(f.nthAmt) || 0; r.actionUnit = f.nthUnit; }
+  if (f.action === "combo") { r.comboIds = [...f.comboIds]; r.comboMode = f.comboMode; r.actionAmount = Number(f.comboPrice) || 0; }
+  return r;
+};
+// ประโยคสรุปโปรตัวต่อสำหรับการ์ด (เช่น "โค้ด SAVE10 → ลด 10% จากยอดรวมทั้งออร์เดอร์")
+const ruleDescribe = (r, menu) => {
+  if (!r) return "";
+  const mName = (id) => menuNameById(menu, id);
+  const parts = [];
+  const conds = r.conds || [];
+  if (conds.includes("code")) parts.push(`โค้ด ${r.code}`);
+  if (conds.includes("minSpend")) parts.push(`ซื้อครบ฿${(r.minSpendTiers || []).map((x) => `${x.min}→฿${x.amount}`).join(" / ")}`);
+  if (conds.includes("minQty")) parts.push(`ซื้อครบ ${(r.minQtyTiers || []).map((x) => `${x.min} ชิ้น→฿${x.amount}`).join(" / ")}`);
+  if (conds.includes("contains")) parts.push(`มี ${(r.containsIds || []).map(mName).join(" + ")} ในตะกร้า`);
+  if (conds.includes("pickup")) parts.push("เฉพาะรับที่ร้าน");
+  if (conds.includes("byoc")) parts.push("นำแก้วมาเอง");
+  if (conds.includes("time")) parts.push(`${r.timeFrom}–${r.timeTo}`);
+  if (conds.includes("days")) parts.push(`วัน${[...(r.days || [])].sort().map((d) => "อา จ อ พ พฤ ศ ส".split(" ")[d]).join(",")}`);
+  let tgt;
+  if (r.target === "all") tgt = "ทุกเมนู";
+  else if (r.target === "items") tgt = `เฉพาะ ${(r.targetIds || []).map(mName).join(" + ")}`;
+  else if (r.target === "addons") {
+    const opts = allAddOnOptions(menu).filter((o) => (r.addonIds || []).includes(o.id));
+    const names = [...new Set(opts.map((o) => o.name))];
+    tgt = `ท็อปปิ้ง ${names.join(" + ") || "…"}${r.addonMenuScope === "some" ? ` (เฉพาะ ${(r.addonMenuIds || []).map(mName).join(" + ")})` : " (ทุกเมนู)"}`;
+  } else tgt = "ยอดรวมทั้งออร์เดอร์";
+  let act;
+  if (r.action === "percent") act = `ลด ${r.actionAmount}%`;
+  else if (r.action === "baht") act = `ลด ฿${r.actionAmount}`;
+  else if (r.action === "free") act = "ฟรี";
+  else if (r.action === "bogo") act = `1แถม1 (ฟรี 1 ทุก ${r.actionAmount} ชิ้น)`;
+  else if (r.action === "nth") act = `ชิ้นที่ ${r.actionN} ลด ${r.actionAmount}${r.actionUnit === "baht" ? " บาท" : "%"}`;
+  else if (r.action === "combo") act = `ชุด ${(r.comboIds || []).map(mName).join(" + ")} ${r.comboMode === "price" ? `฿${r.actionAmount}/ชุด` : `ลด ${r.actionAmount}${r.comboMode === "percent" ? "%" : " บาท"}`}`;
+  const limit = Number(r.limitMax) > 0 ? ` (สูงสุด ${r.limitMax} ชิ้น/ออร์เดอร์)` : "";
+  return (parts.length ? parts.join(" + ") + " → " : "") + act + " จาก" + tgt + limit;
+};
+
+// ปุ่มเลือกแบบเม็ด (ใช้ในฟอร์มตัวต่อ — เลือกจากรายการจริง ไม่ใช่พิมพ์เอง กันพิมพ์ผิด)
+const BuilderChip = ({ on, onClick, children, activeBg, activeColor }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    style={{
+      background: on ? activeBg || COLORS.caramel : "#FFFFFF",
+      color: on ? activeColor || "#FFF9F0" : COLORS.inkSoft,
+      border: `1px solid ${on ? activeBg || COLORS.caramel : COLORS.line}`,
+    }}
+    className="px-3 py-1.5 rounded-full text-xs font-medium active:scale-95 transition-transform"
+  >
+    {children}
+  </button>
+);
+// ปุ่มสลับหน่วย % / ฿ (แบบเดียวกับ mockup — ตัวที่เลือกเป็นสีส้ม ตัวที่ไม่เลือกเป็นสีขาว)
+const UnitToggle = ({ value, onChange, options }) => (
+  <div className="flex gap-1.5">
+    {options.map((o) => (
+      <button
+        key={o.value}
+        type="button"
+        onClick={() => onChange(o.value)}
+        style={{
+          background: value === o.value ? COLORS.caramel : "#FFFFFF",
+          color: value === o.value ? "#FFF9F0" : COLORS.ink,
+          border: `1px solid ${value === o.value ? COLORS.caramel : COLORS.line}`,
+        }}
+        className="min-w-[42px] px-3 py-2 rounded-xl text-sm font-semibold"
+      >
+        {o.label}
+      </button>
+    ))}
+  </div>
+);
+
 function StaffPromoView({ promos, updatePromos, menu }) {
   const [editing, setEditing] = useState(null); // id ของโปรโมชั่นที่กำลังแก้ หรือ "new"
   const [confirmDelete, setConfirmDelete] = useState(null); // id ที่รอยืนยันลบ
-  const [form, setForm] = useState({
-    name: "",
-    type: "discount", // discount | freeAddOn | code | byoc | threshold
-    active: true,
-    discountMode: "percent", // percent = ลดเป็น % | baht = ลดเป็นบาท
-    discountAmount: "",
-    minSpend: "",
-    itemIds: [],
-    addOnIds: [],
-    code: "",
-    maxUses: "",
-    perCustomer: false,
-    pickupOnly: true,
-  });
+  const [form, setForm] = useState(emptyBuilderForm); // ฟอร์มตัวต่อ (เงื่อนไข/เป้าหมาย/ส่วนลด)
 
   const startNew = () => {
     seedIdCounter(menu, promos); // กันโปรโมชั่นใหม่ได้ id ซ้ำกับตัวเก่า (บั๊ก id ซ้ำข้าม session)
     setEditing("new");
     setConfirmDelete(null);
-    setForm({ name: "", type: "discount", active: true, discountMode: "percent", discountAmount: "", minSpend: "", itemIds: [], addOnIds: [], code: "", maxUses: "", perCustomer: false, pickupOnly: true });
+    setForm(emptyBuilderForm());
   };
 
   const startEdit = (p) => {
     seedIdCounter(menu, promos); // กัน id ใหม่ที่สร้างตอนแก้ซ่อมไม่ให้ชนกับของเดิม
     setEditing(p.id);
     setConfirmDelete(null);
-    setForm({
-      name: p.name || "",
-      type: p.type || "discount",
-      active: p.active !== false,
-      // ข้อมูลเก่าที่มีแต่ discountPercent จะเข้าโหมด % อัตโนมัติ ส่วนแบบระบุบาทเข้าโหมดบาท
-      discountMode: Number(p.discountBaht) > 0 ? "baht" : "percent",
-      discountAmount: String(Number(p.discountBaht) > 0 ? p.discountBaht : p.discountPercent || ""),
-      minSpend: String(p.minSpend || ""),
-      // กัน itemIds ที่เมนูถูกลบไปแล้วค้างอยู่
-      itemIds: (p.itemIds || []).filter((id) => menu.some((m) => m.id === id)),
-      addOnIds: p.addOnIds || [],
-      code: p.code || "",
-      maxUses: String(Number(p.maxUses) > 0 ? p.maxUses : ""),
-      perCustomer: !!p.perCustomer,
-      pickupOnly: p.pickupOnly !== false, // โปรโมชั่นเก่า (ไม่มีฟิลด์) ถือว่าเฉพาะรับที่ร้านเหมือนเดิม
-    });
+    // โปรเก่า 5 แบบ → rules → ฟอร์มตัวต่อ (บันทึกครั้งถัดไปจะกลายเป็นโปรแบบ rules)
+    const r = promoToRules(p, menu);
+    const f = rulesToBuilderForm(r, menu);
+    f.name = p.name || "";
+    f.active = p.active !== false;
+    setForm(f);
   };
 
   const toggleId = (arr, id) => (arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id]);
 
+  // ขั้นบันได — แก้ไข/เพิ่ม/ลบขั้น
+  const setTier = (key, i, field, val) =>
+    setForm((f) => ({ ...f, [key]: f[key].map((row, idx) => (idx === i ? { ...row, [field]: val } : row)) }));
+  const addTier = (key) => setForm((f) => ({ ...f, [key]: [...f[key], { t: "", d: "" }] }));
+  const removeTier = (key, i) => setForm((f) => ({ ...f, [key]: f[key].length > 1 ? f[key].filter((_, idx) => idx !== i) : f[key] }));
+
+  // ใช้ขั้นบันได (ซื้อครบ) กับส่วนลด %/บาท — ส่วนลดอยู่ในแต่ละขั้น ไม่ต้องกรอกแยก
+  const tiered =
+    (form.conds.includes("minSpend") || form.conds.includes("minQty")) &&
+    (form.action === "percent" || form.action === "baht");
+
+  // ---------- ตรวจสอบฟอร์มตัวต่อ (โชว์เหตุผลใต้สรุปสด + ปิดปุ่มบันทึก) ----------
+  const validationMsg = useMemo(() => {
+    const f = form;
+    if (!f.name.trim()) return "ตั้งชื่อโปรโมชั่นก่อน";
+    if (f.conds.includes("code") && !f.codeVal.trim()) return "กรอกโค้ดส่วนลด";
+    if (f.conds.includes("minSpend") && !f.spendTiers.some((x) => Number(x.t) > 0 && Number(x.d) > 0)) return "กรอกขั้นซื้อครบให้ครบ (ยอดขั้นต่ำ + จำนวนที่ลด)";
+    if (f.conds.includes("minQty") && !f.qtyTiers.some((x) => Number(x.t) > 0 && Number(x.d) > 0)) return "กรอกขั้นซื้อครบชิ้นให้ครบ (จำนวนชิ้น + จำนวนที่ลด)";
+    if (f.conds.includes("contains") && f.containsIds.length === 0) return "เลือกเมนูที่จะต้องมีในตะกร้า";
+    if (f.conds.includes("time") && (!f.timeFrom || !f.timeTo)) return "กรอกเวลาช่วงโปรโมชั่นให้ครบ (เริ่ม–จบ)";
+    if (f.conds.includes("days") && f.days.length === 0) return "เลือกวันอย่างน้อย 1 วัน";
+    if (f.target === "items" && f.targetMenuIds.length === 0) return "เลือกเมนูอย่างน้อย 1 เมนู";
+    if (f.target === "addons") {
+      if (f.addonNames.length === 0) return "เลือกท็อปปิ้งอย่างน้อย 1 รายการ";
+      if (f.addonScope === "some" && f.addonMenuIds.length === 0) return "เลือกเมนูที่จะใช้ท็อปปิ้งฟรี";
+    }
+    if ((f.action === "percent" || f.action === "baht") && !tiered && !(Number(f.amtVal) > 0)) return "กรอกจำนวนส่วนลด";
+    if (f.action === "bogo" && !(Number(f.amtVal) >= 2)) return "กรอกจำนวนชิ้น (เช่น 2 = ซื้อ 2 จ่าย 1)";
+    if (f.action === "nth" && (!(Number(f.nthN) >= 2) || !(Number(f.nthAmt) > 0))) return "กรอกชิ้นที่ (เช่น 2) และจำนวนที่ลด";
+    if (f.action === "combo") {
+      if (f.comboIds.length < 2) return "เลือกเมนูในชุดอย่างน้อย 2 ตัว";
+      if (!(Number(f.comboPrice) > 0)) return "กรอกราคา/ส่วนลดของชุด";
+    }
+    if (f.action === "free" && f.target === "cart") return "ทำให้ยอดรวมทั้งออร์เดอร์ฟรีไม่ได้ — ฟรีใช้กับเมนู/ท็อปปิ้งเท่านั้น";
+    if ((f.action === "bogo" || f.action === "nth") && (f.target === "addons" || f.target === "cart")) return "1แถม1 / ชิ้นที่N ใช้กับเมนูเท่านั้น";
+    return "";
+  }, [form, tiered]);
+
   const save = () => {
-    if (!form.name.trim()) return;
-    if (form.type === "code" && !form.code.trim()) return;
-    const amount = Number(form.discountAmount);
-    const hasAmount = Number.isFinite(amount) && amount > 0;
-    // ประเภทที่ต้องระบุจำนวนส่วนลด (ลดราคาเมนู / โค้ด / นำแก้วมาเอง / ซื้อครบลด) ถ้ายังไม่ได้กรอก จะไม่บันทึก
-    if (["discount", "code", "byoc"].includes(form.type) && !hasAmount) return;
-    if (form.type === "threshold" && (!hasAmount || !(Number(form.minSpend) > 0))) return;
-    const isBahtMode = form.discountMode === "baht" || form.type === "byoc" || form.type === "threshold";
+    if (validationMsg) return;
     const existing = promos.find((p) => p.id === editing); // ข้อมูลเดิม (ถ้าแก้) — เก็บจำนวนการใช้โค้ดไว้ไม่ให้หาย
     const promo = {
       id: editing === "new" ? nextId() : editing,
       name: form.name.trim(),
-      type: form.type,
       active: form.active,
-      discountPercent: hasAmount && !isBahtMode ? amount : 0,
-      discountBaht: hasAmount && (isBahtMode || form.type === "threshold") ? amount : 0,
-      minSpend: form.type === "threshold" && Number(form.minSpend) > 0 ? Number(form.minSpend) : 0,
-      itemIds: form.type === "code" || form.type === "byoc" || form.type === "threshold" ? [] : form.itemIds,
-      addOnIds: form.type === "freeAddOn" ? form.addOnIds : [],
-      code: form.type === "code" ? form.code.trim().toUpperCase() : "",
-      maxUses: form.type === "code" ? Math.max(0, Math.floor(Number(form.maxUses) || 0)) : 0,
-      perCustomer: form.type === "code" ? !!form.perCustomer : false,
-      pickupOnly: form.type === "byoc" ? form.pickupOnly !== false : false,
+      rules: builderFormToRules(form, menu),
+      // เคลียร์ฟิลด์แบบโปรเก่าทิ้ง (กันหักซ้ำ 2 รอบผ่านเส้นทางเก่า + เส้นทางตัวต่อ)
+      type: "",
+      discountPercent: 0,
+      discountBaht: 0,
+      minSpend: 0,
+      itemIds: [],
+      addOnIds: [],
+      code: "",
+      pickupOnly: true,
       uses: existing && Number(existing.uses) > 0 ? Number(existing.uses) : 0,
       usedBy: existing && Array.isArray(existing.usedBy) ? existing.usedBy : [],
+      maxUses: existing ? Number(existing.maxUses) || 0 : 0,
+      perCustomer: existing ? !!existing.perCustomer : false,
     };
     updatePromos((prev) => (editing === "new" ? [...prev, promo] : prev.map((p) => (p.id === editing ? promo : p))));
     setEditing(null);
@@ -5076,24 +5555,13 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     updatePromos((prev) => prev.map((p) => (p.id === id ? { ...p, active: !p.active } : p)));
   };
 
-  // ตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) ทั้งหมดของเมนูที่เลือกไว้ — ใช้ตอนเลือก "ท็อปปิ้งฟรี"
-  const availableAddOns = useMemo(() => {
-    const items = form.itemIds.length === 0 ? menu : menu.filter((m) => form.itemIds.includes(m.id));
-    const out = [];
-    items.forEach((m) => {
-      (m.addOns || []).forEach((g) => {
-        (g.options || []).forEach((o) => {
-          out.push({ menuId: m.id, menuName: m.name, id: o.id, name: o.name, price: Number(o.price) || 0 });
-        });
-      });
-    });
-    return out;
-  }, [menu, form.itemIds]);
+  const isCodePromo = (p) => p.type === "code" || (p.rules && (p.rules.conds || []).includes("code"));
 
   const discountText = (p) => (Number(p.discountBaht) > 0 ? `฿${p.discountBaht}` : `${p.discountPercent}%`);
 
-  // สรุปเงื่อนไขของโปรโมชั่นสำหรับแสดงในการ์ด
+  // สรุปเงื่อนไขของโปรโมชั่นสำหรับแสดงในการ์ด (โปรเก่า + โปรตัวต่อ)
   const describe = (p) => {
+    if (p.rules) return ruleDescribe(p.rules, menu);
     const target = !p.itemIds || p.itemIds.length === 0 ? "ทุกเมนู" : `เฉพาะ ${p.itemIds.length} เมนู`;
     if (p.type === "discount") return `ลด ${discountText(p)} · ${target}`;
     if (p.type === "code") return `โค้ด “${p.code}” · ลด ${discountText(p)} จากยอดรวม`;
@@ -5113,6 +5581,65 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             ? "#5B7A8C"
             : "#B5652E";
 
+  // ป้ายประเภทของการ์ด (โปรตัวต่อ → ป้ายตามส่วนลด)
+  const badgeInfo = (p) => {
+    if (p.rules) {
+      const labels = { percent: "ลด %", baht: "ลดบาท", free: "ของแถมฟรี", bogo: "1แถม1", nth: "ชิ้นที่ N", combo: "ราคารวมชุด" };
+      return { label: labels[p.rules.action] || "ตัวต่อ", color: COLORS.caramelDark };
+    }
+    return { label: PROMO_TYPE_LABEL[p.type] || p.type, color: typeColor(p.type) };
+  };
+
+  // ประโยคสรุปสดของฟอร์มตัวต่อ
+  const builderSummary = useMemo(() => {
+    const f = form;
+    const parts = [];
+    if (f.conds.includes("code")) parts.push(`กรอกโค้ด ${f.codeVal ? f.codeVal.toUpperCase() : "…"}`);
+    if (f.conds.includes("minSpend")) parts.push(`ซื้อครบ ${f.spendTiers.filter((x) => Number(x.t) > 0).map((x) => `฿${x.t}→฿${x.d || "…"}`).join(" / ")}`);
+    if (f.conds.includes("minQty")) parts.push(`ซื้อครบ ${f.qtyTiers.filter((x) => Number(x.t) > 0).map((x) => `${x.t}ชิ้น→฿${x.d || "…"}`).join(" / ")}`);
+    if (f.conds.includes("contains")) parts.push(`ต้องมี ${f.containsIds.length ? f.containsIds.map((id) => menuNameById(menu, id)).join(" + ") : "เมนูที่เลือก"} ในตะกร้า`);
+    if (f.conds.includes("pickup")) parts.push("เฉพาะรับที่ร้าน");
+    if (f.conds.includes("byoc")) parts.push("ติ๊กนำแก้วมาเอง");
+    if (f.conds.includes("time")) parts.push(`เฉพาะช่วง ${f.timeFrom || "…"}–${f.timeTo || "…"}`);
+    if (f.conds.includes("days")) {
+      const ds = [...f.days].sort().map((d) => "อา จ อ พ พฤ ศ ส".split(" ")[d]).join(", ");
+      if (ds) parts.push(`เฉพาะวัน ${ds}`);
+    }
+    let tgt = { all: "ทุกเมนู", items: "เฉพาะเมนูที่เลือก", addons: "ท็อปปิ้งที่เลือก", cart: "ยอดรวมทั้งออร์เดอร์" }[f.target];
+    if (f.target === "items" && f.targetMenuIds.length) tgt = "เฉพาะเมนู " + f.targetMenuIds.map((id) => menuNameById(menu, id)).join(" + ");
+    if (f.target === "addons" && f.addonNames.length) {
+      const scopeTxt = f.addonScope === "all" ? "ทุกเมนู" : "เฉพาะ " + (f.addonMenuIds.length ? f.addonMenuIds.map((id) => menuNameById(menu, id)).join(" + ") : "เมนูที่เลือก");
+      tgt = "ท็อปปิ้ง " + f.addonNames.join(" + ") + " (" + scopeTxt + ")";
+    }
+    let act;
+    if (tiered) act = ""; // ส่วนลดอยู่ในแต่ละขั้นแล้ว
+    else if (f.action === "percent") act = `ลด ${f.amtVal || "…"}%`;
+    else if (f.action === "baht") act = `ลด ฿${f.amtVal || "…"}`;
+    else if (f.action === "free") act = "ฟรี";
+    else if (f.action === "bogo") act = `ฟรี 1 ทุก ${f.amtVal || "…"} ชิ้น`;
+    else if (f.action === "nth") act = `ชิ้นที่ ${f.nthN || "…"} ลด ${f.nthAmt || "…"}${f.nthUnit === "baht" ? " บาท" : "%"}`;
+    else if (f.action === "combo") {
+      const cnames = f.comboIds.length ? f.comboIds.map((id) => menuNameById(menu, id)).join(" + ") : "…";
+      act = f.comboMode === "price" ? `ชุด ${cnames} ฿${f.comboPrice || "…"}` : `ชุด ${cnames} ลด ${f.comboPrice || "…"}${f.comboMode === "percent" ? "%" : " บาท"}`;
+    }
+    const limit = f.limitVal && ["free", "bogo", "nth", "combo"].includes(f.action) ? ` (สูงสุด ${f.limitVal} ชิ้น/ออร์เดอร์)` : "";
+    const suffix = f.action === "combo" ? (f.comboMode === "price" ? " /ชุด" : " จากราคารวมชุด") : " จาก" + tgt;
+    return ((parts.length ? parts.join(" + ") + (act ? " → " : " · ") : "") + act + suffix + limit).replace(/\s{2,}/g, " ");
+  }, [form, menu, tiered]);
+
+  // คำแนะนำ/คำเตือนใต้สรุปสด
+  const builderHint = useMemo(() => {
+    const f = form;
+    if (f.action === "free" && f.target === "cart") return "⚠ ทำให้ยอดรวมทั้งออร์เดอร์ฟรีไม่ได้ — ฟรีใช้กับเมนู/ท็อปปิ้งเท่านั้น";
+    if (f.action === "combo" && f.comboIds.length < 2) return `⚠ เลือกเมนูในชุดอย่างน้อย 2 ตัว (ตอนนี้ ${f.comboIds.length} ตัว)`;
+    if ((f.action === "bogo" || f.action === "nth") && (f.target === "addons" || f.target === "cart")) return "⚠ 1แถม1 / ชิ้นที่N ใช้กับเมนูเท่านั้น — เปลี่ยนเป้าหมายเป็น 'เฉพาะเมนูที่เลือก'";
+    if (f.action === "nth" && f.target === "items") return "💡 'ชิ้นที่ N' นับต่อเมนูที่เลือก เช่น ชาไทยแก้ว 2 / ชาเขียวแก้ว 2";
+    if (f.action === "combo" && !f.conds.includes("contains")) return "💡 ราคารวมชุด ควรต่อกับเงื่อนไข 'ต้องมีเมนู X ในตะกร้า' ด้วย (กำหนดเมนูในชุด)";
+    if (f.conds.includes("minSpend") && f.conds.includes("minQty")) return "💡 เลือกเงื่อนไขซื้อครบแบบเดียว (บาท หรือ ชิ้น) จะชัดกว่า";
+    if (tiered) return "💡 ใช้ขั้นบันไดอยู่ — ส่วนลดอยู่ในแต่ละขั้นแล้ว ไม่ต้องกรอกซ้ำ";
+    return "เงื่อนไขหลายข้อ = ต้องผ่านครบทุกข้อ · เปิด/ปิดได้ · แก้ได้ตลอด";
+  }, [form, tiered]);
+
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
       <div className="flex items-center justify-between mb-1">
@@ -5128,7 +5655,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
         </button>
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-        ลดราคาเมนู (เป็น % หรือบาท) · ท็อปปิ้งฟรี · โค้ดส่วนลด · นำแก้วมาเอง · ซื้อครบลด — ลูกค้าเห็นผลทันทีทุกเครื่อง
+        สร้างเองได้เป็นสิบแบบด้วยตัวต่อ (เงื่อนไข + เป้าหมาย + ส่วนลด) — ลดราคา · โค้ด · 1แถม1 · แก้วที่ 2 · ชุด · Happy Hour · ซื้อครบขั้นบันได ฯลฯ — ลูกค้าเห็นผลทันทีทุกเครื่อง
       </p>
 
       {promos.length === 0 && (
@@ -5150,8 +5677,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             className="rounded-2xl p-3.5"
           >
             <div className="flex items-center justify-between gap-2 mb-1">
-              <span style={{ background: COLORS.peachSoft, color: typeColor(p.type) }} className="text-[11px] font-bold px-2 py-0.5 rounded-full">
-                {PROMO_TYPE_LABEL[p.type] || p.type}
+              <span style={{ background: COLORS.peachSoft, color: badgeInfo(p).color }} className="text-[11px] font-bold px-2 py-0.5 rounded-full">
+                {badgeInfo(p).label}
               </span>
               <button onClick={() => toggleActive(p.id)} className="flex-shrink-0">
                 <Chip tone={p.active ? "sage" : "caramel"}>{p.active ? "เปิดใช้" : "ปิดใช้"}</Chip>
@@ -5159,7 +5686,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
             </div>
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{p.name}</p>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mt-0.5">{describe(p)}</p>
-            {p.type === "code" && (Number(p.maxUses) > 0 || p.perCustomer) && (
+            {isCodePromo(p) && (Number(p.maxUses) > 0 || p.perCustomer) && (
               <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-medium mt-0.5">
                 {Number(p.maxUses) > 0
                   ? `ใช้แล้ว ${promoUsesCount}/${p.maxUses} ครั้ง · เหลือ ${Math.max(0, Number(p.maxUses) - promoUsesCount)} ครั้ง`
@@ -5206,13 +5733,13 @@ function StaffPromoView({ promos, updatePromos, menu }) {
         </div>
       )}
 
-      {/* ฟอร์มเพิ่ม/แก้ไข */}
+      {/* ฟอร์มเพิ่ม/แก้ไข — ตัวต่อโปรโมชั่น */}
       {editing && (
         <div className="fixed inset-0 z-40 flex flex-col justify-end">
           <div onClick={() => setEditing(null)} className="absolute inset-0 bg-black/30" />
           {/* maxHeight + overflowY: ให้ดรอว์เลื่อนเนื้อหาด้านในเองบนจอใหญ่ (ไม่ไปเลื่อนหน้าต่างหลัง) */}
           <div
-            style={{ background: COLORS.cream, maxHeight: "85vh", overflowY: "auto", overscrollBehavior: "contain" }}
+            style={{ background: COLORS.cream, maxHeight: "88vh", overflowY: "auto", overscrollBehavior: "contain" }}
             className="relative rounded-t-[28px] p-5 pb-8"
           >
             <div className="flex items-center justify-between mb-4">
@@ -5224,7 +5751,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
               </button>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* ชื่อโปรโมชั่น */}
               <div>
                 <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ชื่อโปรโมชั่น</label>
                 <input
@@ -5236,241 +5764,429 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                 />
               </div>
 
+              {/* ① เงื่อนไข — เลือกได้หลายข้อ (AND) */}
               <div>
-                <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ประเภท</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="flex items-baseline gap-1.5 mb-1.5">
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium">① เงื่อนไข</label>
+                  <span style={{ color: COLORS.inkSoft, opacity: 0.75 }} className="text-[10px]">เลือกได้หลายข้อ = ต้องผ่านครบทุกข้อ</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <BuilderChip
+                    on={form.conds.length === 0}
+                    onClick={() => setForm((f) => ({ ...f, conds: [] }))}
+                  >
+                    ไม่มีเงื่อนไข
+                  </BuilderChip>
                   {[
-                    { key: "discount", label: "ลดราคาเมนู" },
-                    { key: "freeAddOn", label: "ท็อปปิ้งฟรี" },
-                    { key: "code", label: "โค้ดส่วนลด" },
+                    { key: "code", label: "กรอกโค้ด" },
+                    { key: "minSpend", label: "ซื้อครบ ฿X" },
+                    { key: "minQty", label: "ซื้อครบ X ชิ้น" },
+                    { key: "contains", label: "มีเมนู X ในตะกร้า" },
+                    { key: "pickup", label: "เฉพาะรับที่ร้าน" },
                     { key: "byoc", label: "นำแก้วมาเอง" },
-                    { key: "threshold", label: "ซื้อครบลด" },
+                    { key: "time", label: "เฉพาะช่วงเวลา" },
+                    { key: "days", label: "เฉพาะวัน" },
+                  ].map((c) => (
+                    <BuilderChip
+                      key={c.key}
+                      on={form.conds.includes(c.key)}
+                      onClick={() =>
+                        setForm((f) => ({
+                          ...f,
+                          conds: f.conds.includes(c.key) ? f.conds.filter((x) => x !== c.key) : [...f.conds, c.key],
+                        }))
+                      }
+                    >
+                      {c.label}
+                    </BuilderChip>
+                  ))}
+                </div>
+
+                {form.conds.includes("code") && (
+                  <div className="mt-2">
+                    <input
+                      value={form.codeVal}
+                      onChange={(e) => setForm((f) => ({ ...f, codeVal: e.target.value.toUpperCase() }))}
+                      placeholder="เช่น SAVE10"
+                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none uppercase"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    />
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">ลูกค้ากรอกโค้ดนี้ที่หน้าชำระเงินเพื่อรับส่วนลด</p>
+                  </div>
+                )}
+
+                {form.conds.includes("minSpend") && (
+                  <div className="mt-2">
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ซื้อครบ (ขั้นบันได — ลดเป็นบาท)</label>
+                    {form.spendTiers.map((row, i) => (
+                      <div key={i} className="flex items-center gap-1.5 mb-1.5">
+                        <span style={{ color: COLORS.inkSoft }} className="text-xs">฿</span>
+                        <input
+                          value={row.t}
+                          onChange={(e) => setTier("spendTiers", i, "t", e.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="เช่น 200"
+                          inputMode="numeric"
+                          className="w-24 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        />
+                        <span style={{ color: COLORS.inkSoft }} className="text-xs">→ ลด ฿</span>
+                        <input
+                          value={row.d}
+                          onChange={(e) => setTier("spendTiers", i, "d", e.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="เช่น 20"
+                          inputMode="numeric"
+                          className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        />
+                        {form.spendTiers.length > 1 && (
+                          <button onClick={() => removeTier("spendTiers", i)} style={{ color: "#C0533F" }} className="text-xs font-bold px-1">✕</button>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={() => addTier("spendTiers")} style={{ color: COLORS.caramelDark }} className="text-xs font-semibold">+ เพิ่มขั้น (ซื้อมากลดมาก)</button>
+                  </div>
+                )}
+
+                {form.conds.includes("minQty") && (
+                  <div className="mt-2">
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ซื้อครบจำนวนชิ้น (ขั้นบันได — ลดเป็นบาท)</label>
+                    {form.qtyTiers.map((row, i) => (
+                      <div key={i} className="flex items-center gap-1.5 mb-1.5">
+                        <input
+                          value={row.t}
+                          onChange={(e) => setTier("qtyTiers", i, "t", e.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="เช่น 3"
+                          inputMode="numeric"
+                          className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        />
+                        <span style={{ color: COLORS.inkSoft }} className="text-xs">ชิ้น → ลด ฿</span>
+                        <input
+                          value={row.d}
+                          onChange={(e) => setTier("qtyTiers", i, "d", e.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="เช่น 15"
+                          inputMode="numeric"
+                          className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                        />
+                        {form.qtyTiers.length > 1 && (
+                          <button onClick={() => removeTier("qtyTiers", i)} style={{ color: "#C0533F" }} className="text-xs font-bold px-1">✕</button>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={() => addTier("qtyTiers")} style={{ color: COLORS.caramelDark }} className="text-xs font-semibold">+ เพิ่มขั้น (ซื้อมากลดมาก)</button>
+                  </div>
+                )}
+
+                {form.conds.includes("contains") && (
+                  <div className="mt-2">
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">เลือกจากเมนูจริง — ต้องมีครบทุกตัวที่เลือกในตะกร้า</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {menu.map((m) => (
+                        <BuilderChip
+                          key={m.id}
+                          on={form.containsIds.includes(m.id)}
+                          onClick={() => setForm((f) => ({ ...f, containsIds: toggleId(f.containsIds, m.id) }))}
+                          activeBg={COLORS.peachSoft}
+                          activeColor={COLORS.caramelDark}
+                        >
+                          {m.name}
+                        </BuilderChip>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {form.conds.includes("time") && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      type="time"
+                      value={form.timeFrom}
+                      onChange={(e) => setForm((f) => ({ ...f, timeFrom: e.target.value }))}
+                      className="rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    />
+                    <span style={{ color: COLORS.inkSoft }} className="text-xs">ถึง</span>
+                    <input
+                      type="time"
+                      value={form.timeTo}
+                      onChange={(e) => setForm((f) => ({ ...f, timeTo: e.target.value }))}
+                      className="rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    />
+                  </div>
+                )}
+
+                {form.conds.includes("days") && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {[1, 2, 3, 4, 5, 6, 0].map((d) => (
+                      <BuilderChip
+                        key={d}
+                        on={form.days.includes(d)}
+                        onClick={() =>
+                          setForm((f) => ({
+                            ...f,
+                            days: f.days.includes(d) ? f.days.filter((x) => x !== d) : [...f.days, d],
+                          }))
+                        }
+                        activeBg={COLORS.sage}
+                      >
+                        {"อา จ อ พ พฤ ศ ส".split(" ")[d]}
+                      </BuilderChip>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ② เป้าหมาย */}
+              <div>
+                <div className="flex items-baseline gap-1.5 mb-1.5">
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium">② เป้าหมาย</label>
+                  <span style={{ color: COLORS.inkSoft, opacity: 0.75 }} className="text-[10px]">ลดกับอะไร</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { key: "all", label: "ทุกเมนู" },
+                    { key: "items", label: "เฉพาะเมนูที่เลือก" },
+                    { key: "addons", label: "ท็อปปิ้งที่เลือก" },
+                    { key: "cart", label: "ยอดรวมทั้งออร์เดอร์" },
                   ].map((t) => (
-                    <button
+                    <BuilderChip
                       key={t.key}
-                      onClick={() => setForm((f) => ({ ...f, type: t.key, discountMode: t.key === "byoc" ? "baht" : f.discountMode }))}
-                      style={{
-                        background: form.type === t.key ? COLORS.caramel : "#FFFFFF",
-                        color: form.type === t.key ? "#FFF9F0" : COLORS.inkSoft,
-                        border: `1px solid ${form.type === t.key ? COLORS.caramel : COLORS.line}`,
-                      }}
-                      className="w-full px-1 py-2 rounded-xl text-[11px] font-medium leading-tight"
+                      on={form.target === t.key}
+                      onClick={() => setForm((f) => ({ ...f, target: t.key }))}
                     >
                       {t.label}
+                    </BuilderChip>
+                  ))}
+                </div>
+
+                {form.target === "items" && (
+                  <div className="mt-2">
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">เลือกเมนู (เลือกได้หลายตัว — ส่วนลดคิดแยกต่อเมนู)</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {menu.map((m) => (
+                        <BuilderChip
+                          key={m.id}
+                          on={form.targetMenuIds.includes(m.id)}
+                          onClick={() => setForm((f) => ({ ...f, targetMenuIds: toggleId(f.targetMenuIds, m.id) }))}
+                          activeBg={COLORS.peachSoft}
+                          activeColor={COLORS.caramelDark}
+                        >
+                          {m.name}
+                        </BuilderChip>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {form.target === "addons" && (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">1) เลือกท็อปปิ้ง (เลือกได้หลายตัว)</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {uniqueAddOnNames(menu).length === 0 ? (
+                          <p style={{ color: COLORS.inkSoft }} className="text-[11px]">ยังไม่มีท็อปปิ้งในเมนู — ไปเพิ่มที่หน้าจัดการเมนูก่อน</p>
+                        ) : (
+                          uniqueAddOnNames(menu).map((n) => (
+                            <BuilderChip
+                              key={n}
+                              on={form.addonNames.includes(n)}
+                              onClick={() => setForm((f) => ({ ...f, addonNames: toggleId(f.addonNames, n) }))}
+                              activeBg={COLORS.sage}
+                            >
+                              {n}
+                            </BuilderChip>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">2) ใช้กับเมนูไหน</p>
+                      <div className="flex gap-1.5 mb-1.5">
+                        <BuilderChip on={form.addonScope === "all"} onClick={() => setForm((f) => ({ ...f, addonScope: "all" }))}>
+                          ทุกเมนู
+                        </BuilderChip>
+                        <BuilderChip on={form.addonScope === "some"} onClick={() => setForm((f) => ({ ...f, addonScope: "some" }))}>
+                          เฉพาะเมนูที่เลือก
+                        </BuilderChip>
+                      </div>
+                      {form.addonScope === "some" && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {menu.map((m) => (
+                            <BuilderChip
+                              key={m.id}
+                              on={form.addonMenuIds.includes(m.id)}
+                              onClick={() => setForm((f) => ({ ...f, addonMenuIds: toggleId(f.addonMenuIds, m.id) }))}
+                              activeBg={COLORS.peachSoft}
+                              activeColor={COLORS.caramelDark}
+                            >
+                              {m.name}
+                            </BuilderChip>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ③ ส่วนลด */}
+              <div>
+                <div className="flex items-baseline gap-1.5 mb-1.5">
+                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium">③ ส่วนลด</label>
+                  <span style={{ color: COLORS.inkSoft, opacity: 0.75 }} className="text-[10px]">ลดยังไง</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { key: "percent", label: "ลดเป็น %" },
+                    { key: "baht", label: "ลดเป็นบาท" },
+                    { key: "free", label: "ทำให้ฟรี" },
+                    { key: "bogo", label: "ฟรี 1 ทุก X ชิ้น", sub: "1แถม1" },
+                    { key: "nth", label: "ชิ้นที่ N ลด", sub: "แก้วที่ 2 ลด 50%" },
+                    { key: "combo", label: "ราคารวมชุด", sub: "X+Y" },
+                  ].map((a) => (
+                    <button
+                      key={a.key}
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, action: a.key }))}
+                      style={{
+                        background: form.action === a.key ? COLORS.caramel : "#FFFFFF",
+                        color: form.action === a.key ? "#FFF9F0" : COLORS.inkSoft,
+                        border: `1px solid ${form.action === a.key ? COLORS.caramel : COLORS.line}`,
+                      }}
+                      className="px-3 py-1.5 rounded-full text-xs font-medium flex flex-col items-center leading-tight"
+                    >
+                      <span>{a.label}</span>
+                      {a.sub && <span className="text-[9px]" style={{ opacity: 0.85 }}>{a.sub}</span>}
                     </button>
                   ))}
                 </div>
-              </div>
 
-              {form.type === "threshold" && (
-                <div className="space-y-2">
-                  <div>
-                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ยอดซื้อขั้นต่ำ (บาท)</label>
+                {/* จำนวนส่วนลด — ซ่อนถ้าใช้ขั้นบันได (ส่วนลดอยู่ในแต่ละขั้นแล้ว) */}
+                {["percent", "baht", "bogo"].includes(form.action) && !tiered && (
+                  <div className="mt-2 flex items-center gap-2">
                     <input
-                      value={form.minSpend}
-                      onChange={(e) => setForm((f) => ({ ...f, minSpend: e.target.value.replace(/[^0-9]/g, "") }))}
-                      placeholder="เช่น 200"
+                      value={form.amtVal}
+                      onChange={(e) => setForm((f) => ({ ...f, amtVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder={form.action === "percent" ? "เช่น 10" : form.action === "bogo" ? "เช่น 2" : "เช่น 20"}
                       inputMode="numeric"
+                      className="w-28 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
                       style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
                     />
+                    <span style={{ color: COLORS.inkSoft }} className="text-xs font-medium">
+                      {form.action === "percent" ? "%" : form.action === "bogo" ? "ชิ้น (ซื้อ X จ่าย X-1)" : "บาท"}
+                    </span>
                   </div>
-                  <div>
-                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จำนวนเงินที่ลด (บาท)</label>
+                )}
+
+                {form.action === "nth" && (
+                  <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                    <span style={{ color: COLORS.inkSoft }} className="text-xs">ชิ้นที่</span>
                     <input
-                      value={form.discountAmount}
-                      onChange={(e) => setForm((f) => ({ ...f, discountAmount: e.target.value.replace(/[^0-9]/g, "") }))}
-                      placeholder="เช่น 20"
+                      value={form.nthN}
+                      onChange={(e) => setForm((f) => ({ ...f, nthN: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder="เช่น 2"
                       inputMode="numeric"
+                      className="w-16 rounded-xl px-3 py-2 text-sm bg-white outline-none"
                       style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
                     />
-                  </div>
-                  <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
-                    ลูกค้าซื้อครบตามยอดขั้นต่ำในตะกร้า แล้วหักส่วนลดให้อัตโนมัติ ไม่ต้องกรอกอะไร
-                  </p>
-                </div>
-              )}
-              {(form.type === "discount" || form.type === "code" || form.type === "byoc") && (
-                <div>
-                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">
-                    จำนวนส่วนลด
-                  </label>
-                  {form.type !== "byoc" && (
-                    <div className="flex gap-1.5 mb-1.5">
-                      {[
-                        { key: "percent", label: "เป็น %" },
-                        { key: "baht", label: "เป็นบาท (฿)" },
-                      ].map((m) => (
-                        <button
-                          key={m.key}
-                          type="button"
-                          onClick={() => setForm((f) => ({ ...f, discountMode: m.key }))}
-                          style={{
-                            background: form.discountMode === m.key ? COLORS.caramel : "#FFFFFF",
-                            color: form.discountMode === m.key ? "#FFF9F0" : COLORS.inkSoft,
-                            border: `1px solid ${form.discountMode === m.key ? COLORS.caramel : COLORS.line}`,
-                          }}
-                          className="flex-1 px-3 py-2 rounded-xl text-xs font-medium"
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <input
-                    value={form.discountAmount}
-                    onChange={(e) => setForm((f) => ({ ...f, discountAmount: e.target.value.replace(/[^0-9]/g, "") }))}
-                    placeholder={form.discountMode === "baht" || form.type === "byoc" ? "เช่น 5" : "เช่น 10"}
-                    inputMode="numeric"
-                    style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                    className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
-                  />
-                  <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
-                    {form.type === "byoc"
-                      ? "ลูกค้าติ๊ก \"นำแก้วมาเอง\" ที่หน้าชำระเงิน แล้วหักจำนวนนี้จากยอดรวม"
-                      : form.discountMode === "baht"
-                        ? "เช่น 5 = ลด 5 บาท"
-                        : "เช่น 10 = ลด 10%"}
-                  </p>
-                </div>
-              )}
-
-              {form.type === "byoc" && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setForm((f) => ({ ...f, pickupOnly: !f.pickupOnly }))}
-                    style={{
-                      background: form.pickupOnly ? COLORS.sageSoft : "#FFFFFF",
-                      border: `1px solid ${form.pickupOnly ? COLORS.sage : COLORS.line}`,
-                    }}
-                    className="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium flex items-center justify-between gap-2"
-                  >
-                    <span style={{ color: form.pickupOnly ? COLORS.sage : COLORS.inkSoft }}>ใช้ได้เฉพาะการรับที่ร้าน</span>
-                    <Chip tone={form.pickupOnly ? "sage" : "caramel"}>{form.pickupOnly ? "เปิด" : "ปิด"}</Chip>
-                  </button>
-                  <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
-                    {form.pickupOnly
-                      ? "ลูกค้าที่สั่งจัดส่งจะไม่เห็นช่องติ๊กนำแก้วมาเอง"
-                      : "ปิด = ลูกค้าสั่งจัดส่งก็ติ๊กนำแก้วมาเองได้ (ใช้ได้ทั้งสองแบบ)"}
-                  </p>
-                </div>
-              )}
-
-              {form.type === "code" && (
-                <div className="space-y-2.5">
-                  <div>
-                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
-                      โค้ดส่วนลด (ลูกค้ากรอกที่หน้าชำระเงิน)
-                    </label>
+                    <span style={{ color: COLORS.inkSoft }} className="text-xs">ลด</span>
                     <input
-                      value={form.code}
-                      onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))}
-                      placeholder="เช่น SAVE10"
-                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none uppercase"
-                    />
-                  </div>
-                  <div>
-                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">
-                      จำกัดจำนวนครั้งที่ใช้ได้ทั้งหมด (เว้นว่าง = ไม่จำกัด)
-                    </label>
-                    <input
-                      value={form.maxUses}
-                      onChange={(e) => setForm((f) => ({ ...f, maxUses: e.target.value.replace(/[^0-9]/g, "") }))}
+                      value={form.nthAmt}
+                      onChange={(e) => setForm((f) => ({ ...f, nthAmt: e.target.value.replace(/[^0-9]/g, "") }))}
                       placeholder="เช่น 50"
                       inputMode="numeric"
+                      className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
                       style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
-                      className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                    />
+                    <UnitToggle
+                      value={form.nthUnit}
+                      onChange={(v) => setForm((f) => ({ ...f, nthUnit: v }))}
+                      options={[
+                        { value: "percent", label: "%" },
+                        { value: "baht", label: "฿" },
+                      ]}
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setForm((f) => ({ ...f, perCustomer: !f.perCustomer }))}
-                    style={{
-                      background: form.perCustomer ? COLORS.sageSoft : "#FFFFFF",
-                      border: `1px solid ${form.perCustomer ? COLORS.sage : COLORS.line}`,
-                    }}
-                    className="w-full rounded-xl px-3.5 py-2.5 text-sm font-medium flex items-center justify-between gap-2"
-                  >
-                    <span style={{ color: form.perCustomer ? COLORS.sage : COLORS.inkSoft }}>
-                      ใช้ได้ 1 ครั้งต่อลูกค้า (โค้ดเพื่อนแนะนำ)
-                    </span>
-                    <Chip tone={form.perCustomer ? "sage" : "caramel"}>{form.perCustomer ? "เปิด" : "ปิด"}</Chip>
-                  </button>
-                  <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
-                    {form.perCustomer
-                      ? "ลูกค้าแต่ละคนใช้โค้ดนี้ได้แค่ครั้งเดียว แม้สั่งหลายรอบ"
-                      : "จำกัดจำนวนครั้งรวม: ลูกค้าคนเดียวกันสั่งหลายรอบก็นับทีละครั้ง"}
-                  </p>
-                </div>
-              )}
+                )}
 
-              {form.type !== "code" && form.type !== "byoc" && form.type !== "threshold" && (
-                <div>
-                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">ใช้กับเมนูไหน</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      onClick={() => setForm((f) => ({ ...f, itemIds: [] }))}
-                      style={{
-                        background: form.itemIds.length === 0 ? COLORS.caramel : "#FFFFFF",
-                        color: form.itemIds.length === 0 ? "#FFF9F0" : COLORS.inkSoft,
-                        border: `1px solid ${form.itemIds.length === 0 ? COLORS.caramel : COLORS.line}`,
-                      }}
-                      className="px-3 py-1.5 rounded-full text-xs font-medium"
-                    >
-                      ทุกเมนู
-                    </button>
-                    {menu.map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => setForm((f) => ({ ...f, itemIds: toggleId(f.itemIds, m.id) }))}
-                        style={{
-                          background: form.itemIds.includes(m.id) ? COLORS.peachSoft : "#FFFFFF",
-                          color: form.itemIds.includes(m.id) ? COLORS.caramelDark : COLORS.inkSoft,
-                          border: `1px solid ${form.itemIds.includes(m.id) ? COLORS.caramel : COLORS.line}`,
-                        }}
-                        className="px-3 py-1.5 rounded-full text-xs font-medium"
-                      >
-                        {m.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {form.type === "freeAddOn" && (
-                <div>
-                  <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1.5">
-                    ตัวเลือกที่จะให้ฟรี
-                    {form.itemIds.length === 0 && menu.length > 0 && " (ทุกเมนู)"}
-                  </label>
-                  {availableAddOns.length === 0 ? (
-                    <p style={{ color: COLORS.inkSoft }} className="text-[11px]">
-                      เมนูที่เลือกยังไม่มีตัวเลือกเพิ่ม (ท็อปปิ้ง/แอดออน) — ไปเพิ่มที่หน้าจัดการเมนูก่อน หรือเลือกเมนูอื่น
-                    </p>
-                  ) : (
+                {form.action === "combo" && (
+                  <div className="mt-2 space-y-2">
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px]">เลือกเมนูในชุด (อย่างน้อย 2 ตัว — ซื้อครบทั้งชุดในตะกร้าถึงได้ส่วนลด)</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {availableAddOns.map((o) => (
-                        <button
-                          key={`${o.menuId}::${o.id}`}
-                          onClick={() => setForm((f) => ({ ...f, addOnIds: toggleId(f.addOnIds, o.id) }))}
-                          style={{
-                            background: form.addOnIds.includes(o.id) ? COLORS.sage : "#FFFFFF",
-                            color: form.addOnIds.includes(o.id) ? "#FFF9F0" : COLORS.inkSoft,
-                            border: `1px solid ${form.addOnIds.includes(o.id) ? COLORS.sage : COLORS.line}`,
-                          }}
-                          className="px-3 py-1.5 rounded-full text-xs font-medium"
+                      {menu.map((m) => (
+                        <BuilderChip
+                          key={m.id}
+                          on={form.comboIds.includes(m.id)}
+                          onClick={() => setForm((f) => ({ ...f, comboIds: toggleId(f.comboIds, m.id) }))}
+                          activeBg={COLORS.peachSoft}
+                          activeColor={COLORS.caramelDark}
                         >
-                          {o.name} ({o.menuName}) · ฿{o.price}
-                        </button>
+                          {m.name}
+                        </BuilderChip>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <UnitToggle
+                        value={form.comboMode}
+                        onChange={(v) => setForm((f) => ({ ...f, comboMode: v }))}
+                        options={[
+                          { value: "price", label: "ชุดละ ฿X" },
+                          { value: "percent", label: "%" },
+                          { value: "baht", label: "฿" },
+                        ]}
+                      />
+                      <input
+                        value={form.comboPrice}
+                        onChange={(e) => setForm((f) => ({ ...f, comboPrice: e.target.value.replace(/[^0-9]/g, "") }))}
+                        placeholder={form.comboMode === "price" ? "เช่น 50" : form.comboMode === "percent" ? "เช่น 20" : "เช่น 10"}
+                        inputMode="numeric"
+                        className="w-24 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                        style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      />
+                      <span style={{ color: COLORS.inkSoft }} className="text-xs font-medium">
+                        {form.comboMode === "price" ? "฿/ชุด (ตั้งราคาชุดตายตัว)" : form.comboMode === "percent" ? "% จากราคาเต็มทั้งชุด" : "บาท จากราคาเต็มทั้งชุด"}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
+                {/* จำกัดสูงสุด — ฟรี / 1แถม1 / ชิ้นN / ชุด */}
+                {["free", "bogo", "nth", "combo"].includes(form.action) && (
+                  <div className="mt-2">
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ color: COLORS.inkSoft }} className="text-xs">จำกัดสูงสุด</span>
+                      <input
+                        value={form.limitVal}
+                        onChange={(e) => setForm((f) => ({ ...f, limitVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                        placeholder="1"
+                        inputMode="numeric"
+                        className="w-16 rounded-xl px-3 py-2 text-sm bg-white outline-none"
+                        style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                      />
+                      <span style={{ color: COLORS.inkSoft }} className="text-xs">ชิ้นต่อออร์เดอร์ (เว้นว่าง = ไม่จำกัด)</span>
+                    </div>
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">
+                      {form.action === "free" && "เว้นว่าง = ฟรีทุกชิ้นที่สั่ง · ใส่ 1 = ฟรีแค่ 1 ชิ้นต่อออร์เดอร์ (ของแถม)"}
+                      {form.action === "bogo" && "เว้นว่าง = ฟรีทุกคู่ · ใส่ 1 = ฟรีสูงสุด 1 ชิ้นต่อออร์เดอร์ แม้สั่ง 10 แก้ว"}
+                      {form.action === "nth" && "เว้นว่าง = ทุกเมนูที่เลือกได้ส่วนลด · ใส่ 1 = ชิ้นที่ N ลดแค่ 1 ครั้งต่อออร์เดอร์"}
+                      {form.action === "combo" && "เว้นว่าง = ทุกชุดได้ส่วนลด · ใส่ 2 = ลดแค่ 2 ชุดต่อออร์เดอร์"}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* สรุปสด + คำเตือน */}
+              <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
+                <p style={{ color: COLORS.inkSoft }} className="text-[11px] font-medium mb-1">สรุปโปรโมชั่น (ลูกค้าจะเห็นแบบนี้)</p>
+                <p style={{ color: COLORS.ink }} className="text-sm font-semibold leading-snug">{builderSummary}</p>
+                <p style={{ color: validationMsg ? "#C0533F" : COLORS.caramelDark }} className="text-[11px] mt-1.5">
+                  {validationMsg || builderHint}
+                </p>
+              </div>
+
+              {/* เปิด/ปิด */}
               <div className="flex items-center justify-between pt-1">
                 <button onClick={() => setForm((f) => ({ ...f, active: !f.active }))} className="flex items-center gap-2">
                   <span
@@ -5490,23 +6206,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
 
               <button
                 onClick={save}
-                disabled={
-                  !form.name.trim() ||
-                  (form.type === "code" && !form.code.trim()) ||
-                  (["discount", "code", "byoc"].includes(form.type) && !(Number(form.discountAmount) > 0)) ||
-                  (form.type === "threshold" && (!(Number(form.minSpend) > 0) || !(Number(form.discountAmount) > 0)))
-                }
-                style={{
-                  background: COLORS.ink,
-                  color: "#FFF9F0",
-                  opacity:
-                    !form.name.trim() ||
-                    (form.type === "code" && !form.code.trim()) ||
-                    (["discount", "code", "byoc"].includes(form.type) && !(Number(form.discountAmount) > 0)) ||
-                    (form.type === "threshold" && (!(Number(form.minSpend) > 0) || !(Number(form.discountAmount) > 0)))
-                      ? 0.4
-                      : 1,
-                }}
+                disabled={!!validationMsg}
+                style={{ background: COLORS.ink, color: "#FFF9F0", opacity: validationMsg ? 0.4 : 1 }}
                 className="w-full py-3 rounded-2xl text-sm font-bold mt-1"
               >
                 {editing === "new" ? "เพิ่มโปรโมชั่น" : "บันทึกการแก้ไข"}
