@@ -104,6 +104,7 @@ function Phone(props) { return (<IconBase {...props}><path d="M22 16.92v3a2 2 0 
 function MapPin(props) { return (<IconBase {...props}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></IconBase>); }
 function DownloadIcon(props) { return (<IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></IconBase>); }
 function ShareIcon(props) { return (<IconBase {...props}><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></IconBase>); }
+function TransferArrowIcon(props) { return (<IconBase {...props}><line x1="3" y1="12" x2="20" y2="12" /><polyline points="13 5 20 12 13 19" /></IconBase>); }
 function Eye(props) { return (<IconBase {...props}><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.5" /></IconBase>); }
 function CalendarIcon(props) { return (<IconBase {...props}><rect x="3" y="4.5" width="18" height="16" rx="2" /><line x1="3" y1="9.5" x2="21" y2="9.5" /><line x1="8" y1="2.5" x2="8" y2="6.5" /><line x1="16" y1="2.5" x2="16" y2="6.5" /></IconBase>); }
 function Box(props) { return (<IconBase {...props}><path d="M21 8.5v7.5l-9 4.5-9-4.5V8.5L12 4l9 4.5z" /><polyline points="3.5 8.5 12 13 20.5 8.5" /><line x1="12" y1="13" x2="12" y2="21.5" /></IconBase>); }
@@ -4358,7 +4359,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
 }
 
 // ================= STAFF ORDERS VIEW =================
-function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
+function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive, onTransferGoods, onDelete, onDeleteOrders, onMarkPaid, onUnmarkPaid }) {
   const [zoomedSlip, setZoomedSlip] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null); // order id รอ confirm ลบรายตัว
   const [deletePickOpen, setDeletePickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่จะลบ
@@ -4366,12 +4367,30 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
   const [confirmDeletePicked, setConfirmDeletePicked] = useState(false); // รอ confirm ลบที่เลือก
   const [confirmCancelId, setConfirmCancelId] = useState(null); // order id รอ confirm ยกเลิก
   const [cancelReason, setCancelReason] = useState(""); // สาเหตุการยกเลิก — พนักงานต้องกรอกก่อนยืนยัน
+  const [confirmReviveId, setConfirmReviveId] = useState(null); // order id รอ confirm "ลูกค้ามารับของแล้ว" (ยกเลิกแล้วแต่มารับของ)
+  const [transferFromId, setTransferFromId] = useState(null); // ออร์เดอร์ A (ยกเลิก+ทำแล้ว) ที่กำลังเลือกออร์เดอร์ให้ของ — เปิดชีต
+  const [transferPair, setTransferPair] = useState(null); // { from, to } — รอ confirm โอนของจาก A ไปให้ B
   const [deleteCancelPickOpen, setDeleteCancelPickOpen] = useState(false); // เปิดชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ
   const [deleteCancelPickIds, setDeleteCancelPickIds] = useState([]); // id ออร์เดอร์ที่ยกเลิกที่ติ๊กเลือกไว้
   const [confirmDeleteCancelled, setConfirmDeleteCancelled] = useState(false); // รอ confirm ลบที่ยกเลิกที่เลือกไว้
+  const [highlightNewId, setHighlightNewId] = useState(null); // ออร์เดอร์ใหม่ที่กำลังไฮไลต์ หลังกดปุ่ม "ไปดู"
+  // จำนวนออร์เดอร์ที่ยังไม่ได้เริ่มทำ (สถานะ "ใหม่") — ใช้กับแถบเตือนกันลืม
+  const unstartedNewCount = orders.filter((o) => o.status === "new").length;
 
   const advance = (id) => {
     onAdvance(id);
+  };
+
+  // กด "ไปดู" — เลื่อนจอไปหาออร์เดอร์ใหม่ใบแรกที่ยังไม่ได้เริ่มทำ + ไฮไลต์กะพริบชั่วคราว
+  const goToNewOrder = () => {
+    const first = sorted.find((o) => o.status === "new");
+    if (!first) return;
+    const el = document.getElementById(`order-card-${first.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightNewId(first.id);
+      setTimeout(() => setHighlightNewId(null), 2600);
+    }
   };
 
   // บันทึกรูปสลิปของออร์เดอร์นี้ลงเครื่อง (ทีละใบ) — หลักฐานการชำระ/การรับสินค้า
@@ -4388,18 +4407,42 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: "เสร็จแล้ว" },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
     delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
+    received: { label: "รับสินค้าแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
   };
 
-  const sorted = [...orders].sort((a, b) => b.createdAt - a.createdAt);
+  // เรียงแบบคิว (FIFO): ออร์เดอร์เก่าอยู่บนสุด — ออร์เดอร์ใหม่ที่เพิ่งเข้ามาต่อคิวล่าง (ไม่เด้งขึ้นบน)
+  // พอกด "เสร็จแล้ว"/รับสินค้าแล้ว/จัดส่งแล้ว/ยกเลิก ออร์เดอร์จะไหลลงไปส่วนล่าง ออร์เดอร์ถัดไปค่อยขยับขึ้นมา
+  const statusRank = { new: 0, preparing: 0, done: 1, delivered: 2, received: 2, cancelled: 3 };
+  const sorted = [...orders].sort((a, b) => {
+    const ra = statusRank[a.status] !== undefined ? statusRank[a.status] : 1;
+    const rb = statusRank[b.status] !== undefined ? statusRank[b.status] : 1;
+    if (ra !== rb) return ra - rb;
+    return a.createdAt - b.createdAt;
+  });
   // ออร์เดอร์ที่เสร็จสิ้นจริง ๆ (จัดส่งแล้ว + รับที่ร้านที่ทำเสร็จแล้ว) — รายการที่ลบได้
   // ออร์เดอร์จัดส่งที่แค่ "เสร็จแล้ว" ยังรออยู่ในคิวจัดส่ง จึงไม่นับรวม
   const finishedOrders = orders.filter(
-    (o) => o.status === "delivered" || (o.status === "done" && o.method === "pickup")
+    (o) => o.status === "delivered" || o.status === "received" || (o.status === "done" && o.method === "pickup")
   );
   const finishedCount = finishedOrders.length;
   const cancelledOrders = orders.filter((o) => o.status === "cancelled");
   const cancelledCount = cancelledOrders.length;
+
+  // เปรียบเทียบรายการอาหาร 2 ออร์เดอร์ว่าตรงกันหรือไม่ (ชื่อ + จำนวน) — ใช้หาว่าออร์เดอร์ไหนรับของต่อได้
+  const itemsMatch = (a, b) => {
+    const norm = (items) =>
+      (items || [])
+        .map((i) => `${i.name}::${i.qty}`)
+        .sort()
+        .join("|");
+    return norm(a) === norm(b);
+  };
+  // ออร์เดอร์ที่ยังทำอยู่ (ใหม่/กำลังทำ) — ตัวเลือกที่จะรับของจากออร์เดอร์ที่ยกเลิก
+  const activeOrders = orders.filter((o) => o.status === "new" || o.status === "preparing");
+  // ออร์เดอร์นี้ (ที่ยกเลิก + ทำเสร็จแล้ว + ยังไม่ได้โอนของ) มีออร์เดอร์อื่นที่รายการตรงกันไหม —
+  // มี ถึงจะขึ้นปุ่ม "ใช้ของให้ออร์เดอร์อื่น"
+  const hasMatchFor = (order) => activeOrders.some((o) => itemsMatch(order.items, o.items));
 
   return (
     <div style={{ background: COLORS.cream, minHeight: "100%" }} className="px-5 pt-6 pb-10">
@@ -4436,6 +4479,29 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
       </div>
       <p style={{ color: COLORS.inkSoft }} className="text-xs mb-5">อัปเดตแบบเรียลไทม์เมื่อลูกค้าสั่ง</p>
 
+      {/* แถบเตือนออเดอร์ใหม่ — เตือนค้างจนกว่าจะกด "เริ่มทำ" ครบ (กันลืมออเดอร์ที่มาต่อท้ายคิว FIFO) */}
+      {unstartedNewCount > 0 && (
+        <div
+          style={{
+            background: "linear-gradient(135deg, #C0533F, #A8442F)",
+            boxShadow: "0 6px 18px rgba(192,83,63,0.35)",
+          }}
+          className="rounded-2xl px-4 py-3 mb-4 flex items-center gap-3"
+        >
+          <span style={{ background: "#FFD9A0" }} className="w-2.5 h-2.5 rounded-full animate-pulse flex-shrink-0" />
+          <span style={{ color: "#FFF9F0" }} className="text-sm font-semibold flex-1 min-w-0">
+            มีออเดอร์ใหม่ {unstartedNewCount} รายการ — ยังไม่ได้เริ่มทำ
+          </span>
+          <button
+            onClick={goToNewOrder}
+            style={{ background: "#FFF9F0", color: "#A8442F" }}
+            className="rounded-full px-3.5 py-1.5 text-xs font-bold flex items-center gap-1 flex-shrink-0 active:scale-95 transition-transform"
+          >
+            ไปดู <ChevronDown size={12} />
+          </button>
+        </div>
+      )}
+
       {sorted.length === 0 && (
         <div className="text-center py-20" style={{ color: COLORS.inkSoft }}>
           <ChefHat size={32} className="mx-auto mb-2 opacity-50" />
@@ -4453,14 +4519,23 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
           return (
             <div
               key={order.id}
-              style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
+              id={`order-card-${order.id}`}
+              style={{
+                background: "#FFFFFF",
+                border: `1.5px solid ${highlightNewId === order.id ? COLORS.peach : COLORS.line}`,
+                boxShadow:
+                  highlightNewId === order.id
+                    ? "0 0 0 4px rgba(242,164,107,0.4), 0 8px 20px rgba(242,164,107,0.3)"
+                    : undefined,
+              }}
               className="rounded-2xl p-4"
             >
               {/* หัวการ์ด: หมายเลขออร์เดอร์ + ป้ายใหม่ + สถานะ + ลบถาวร */}
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <span style={{ color: COLORS.ink }} className="font-bold text-sm flex-shrink-0">#{order.orderNo}</span>
-                  {recentOrderIds && recentOrderIds.has(order.id) && (
+                  {/* ป้าย "ใหม่!" ค้างจนกว่าจะกด "เริ่มทำ" (สถานะยังเป็น new) — ไม่หายเองตามเวลา */}
+                  {order.status === "new" && (
                     <span
                       style={{ background: "#C0533F", color: "#FFF9F0" }}
                       className="text-[10px] font-bold px-2 py-1 rounded-full animate-pulse flex-shrink-0"
@@ -4477,6 +4552,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     {order.status === "preparing" && <Clock size={11} />}
                     {order.status === "done" && <Check size={11} />}
                     {order.status === "delivered" && <Truck size={11} />}
+                    {order.status === "received" && <ChefHat size={11} />}
                     {order.status === "cancelled" && <X size={11} />}
                     {metaLabel}
                   </span>
@@ -4530,7 +4606,16 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                     <QrCode size={11} /> แนบสลิปแล้ว
                   </span>
                 )}
-              </div>
+              </div>              {/* ออเดอร์ที่ได้ของสำเร็จรูปมา (โอนจากออร์เดอร์ที่ยกเลิก) — บอกพนักงานว่าไม่ต้องทำใหม่ */}
+              {order.goodsFromOrderId && (
+                <div style={{ background: COLORS.sage, color: "#FFF9F0" }} className="rounded-xl px-3 py-2 mb-2.5 flex items-center gap-2">
+                  <ArrowLeft size={14} className="flex-shrink-0" />
+                  <span className="text-xs font-bold">
+                    ของมาจากออร์เดอร์ #{orders.find((o) => o.id === order.goodsFromOrderId)?.orderNo || ""}
+                  </span>
+                  <span className="text-[11px] font-medium opacity-90 ml-auto flex-shrink-0">ไม่ต้องทำใหม่</span>
+                </div>
+              )}
 
               {/* รายการอาหาร + ราคาต่อบรรทัด */}
               <div className="space-y-1.5 mb-2.5">
@@ -4550,6 +4635,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                         <Pencil size={10} className="mt-0.5 flex-shrink-0" /> {i.note}
                       </p>
                     )}
+
                   </div>
                 ))}
               </div>
@@ -4557,6 +4643,21 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                 <p style={{ background: "#F3D9D3", color: "#8A3A2B" }} className="text-[11px] font-medium rounded-lg px-2 py-1.5 mb-2 flex items-start gap-1">
                   <X size={10} className="mt-0.5 flex-shrink-0" /> สาเหตุที่ยกเลิก: {order.cancelReason}
                 </p>
+              )}
+              {order.status === "cancelled" && order.cancelledFrom === "done" && !order.goodsUsedByOrderId && (
+                <p style={{ background: "#F3D9D3", color: "#8A3A2B" }} className="text-[11px] font-medium rounded-lg px-2 py-1.5 mb-2 flex items-start gap-1">
+                  <AlertTriangle size={10} className="mt-0.5 flex-shrink-0" />
+                  ทำเสร็จแล้วก่อนยกเลิก — ต้นทุนติดบัญชีเป็นขาดทุน ถ้ายังไม่ได้ใช้ของ กด "ลูกค้ามารับของแล้ว" หรือ "ใช้ของให้ออร์เดอร์อื่น"
+                </p>
+              )}
+              {order.status === "cancelled" && order.goodsUsedByOrderId && (
+                <div style={{ background: COLORS.sage, color: "#FFF9F0" }} className="rounded-xl px-3 py-2 mb-2 flex items-center gap-2">
+                  <TransferArrowIcon size={15} className="flex-shrink-0" />
+                  <span className="text-xs font-bold">
+                    ของถูกใช้ให้ออร์เดอร์ #{orders.find((o) => o.id === order.goodsUsedByOrderId)?.orderNo || ""} แล้ว
+                  </span>
+                  <span className="text-[11px] font-medium opacity-90 ml-auto flex-shrink-0">ไม่นับขาดทุน</span>
+                </div>
               )}
               {order.slip?.dataUrl && (
                 <div
@@ -4600,13 +4701,34 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
                   <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {(order.status === "new" || order.status === "preparing") && (
+                  {(order.status === "new" || order.status === "preparing" || order.status === "done") && (
                     <button
                       onClick={() => { setConfirmCancelId(order.id); setCancelReason(""); }}
                       style={{ color: "#C0533F", border: "1px solid #E3B7AC", background: "#FFFFFF" }}
                       className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
                     >
                       <X size={12} /> ยกเลิก
+                    </button>
+                  )}
+                  {order.status === "cancelled" && !order.goodsUsedByOrderId && (
+                    <button
+                      onClick={() => setConfirmReviveId(order.id)}
+                      style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                      className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+                    >
+                      <Check size={12} /> ลูกค้ามารับของแล้ว
+                    </button>
+                  )}
+                  {order.status === "cancelled" &&
+                    order.cancelledFrom === "done" &&
+                    !order.goodsUsedByOrderId &&
+                    hasMatchFor(order) && (
+                    <button
+                      onClick={() => setTransferFromId(order.id)}
+                      style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                      className="text-xs font-semibold px-3.5 py-2 rounded-full flex items-center gap-1 active:scale-95 transition-transform"
+                    >
+                      <ShareIcon size={12} /> ใช้ของให้ออร์เดอร์อื่น
                     </button>
                   )}
                   {meta.action && (
@@ -4858,6 +4980,139 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onDelete
         </div>
       )}
 
+      {/* ยืนยัน "ลูกค้ามารับของแล้ว" — ออร์เดอร์ที่ยกเลิกไปแล้วแต่มารับของ/รับสินค้าจริง */}
+      {confirmReviveId && (
+        <div
+          onClick={() => setConfirmReviveId(null)}
+          style={{ background: "rgba(20,14,8,0.55)" }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
+        >
+          <SheetLock />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#FFFFFF" }}
+            className="w-full max-w-sm rounded-2xl p-5"
+          >
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">ลูกค้ามารับของแล้ว?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              ออร์เดอร์ #{orders.find((o) => o.id === confirmReviveId)?.orderNo || ""} จะกลับเป็น "รับสินค้าแล้ว"/"จัดส่งเสร็จแล้ว"
+              และนับรวมยอดขาย — ถ้ายังไม่จ่าย อย่าลืมกด "เก็บเงินแล้ว"
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmReviveId(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยังไม่ใช่
+              </button>
+              <button
+                onClick={() => { onRevive(confirmReviveId); setConfirmReviveId(null); }}
+                style={{ background: COLORS.sage, color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยืนยัน รับของแล้ว
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ชีตเลือกออร์เดอร์ที่จะเอาของไปให้ — ของจากออร์เดอร์ที่ยกเลิก+ทำเสร็จแล้ว เอาไปให้ออร์เดอร์ใหม่ที่สั่งเหมือนกัน */}
+      {transferFromId && (() => {
+        const src = orders.find((o) => o.id === transferFromId);
+        return (
+          <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
+            <SheetLock />
+            <div className="relative flex-1 min-h-0 w-full max-w-2xl mx-auto rounded-t-[28px] p-5 pb-8 flex flex-col">
+              <div className="flex items-center justify-between mb-1">
+                <h2 style={{ fontFamily: "'Itim', sans-serif", color: COLORS.ink }} className="text-lg font-semibold">
+                  เอาของให้ออร์เดอร์ไหน
+                </h2>
+                <button onClick={() => setTransferFromId(null)} style={{ color: COLORS.inkSoft }}>
+                  <X size={20} />
+                </button>
+              </div>
+              <p style={{ color: COLORS.inkSoft }} className="text-xs mb-2">
+                ของจากออร์เดอร์ #{src?.orderNo || ""} (ทำเสร็จแล้ว แต่ยกเลิก) — เลือกออร์เดอร์ที่จะเอาของไปให้
+                (ใบที่รายการตรงกันมีป้ายเขียว "ตรงกับของที่มี")
+              </p>
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pb-3" style={{ overscrollBehavior: "contain" }}>
+                {activeOrders.length === 0 && (
+                  <p style={{ color: COLORS.inkSoft }} className="text-xs py-8 text-center">
+                    ยังไม่มีออร์เดอร์ที่กำลังทำอยู่
+                  </p>
+                )}
+                {activeOrders.map((b) => {
+                  const matched = src ? itemsMatch(src.items, b.items) : false;
+                  return (
+                    <button
+                      key={b.id}
+                      onClick={() => { setTransferPair({ from: transferFromId, to: b.id }); setTransferFromId(null); }}
+                      style={{ background: "#FFFFFF", border: `1.5px solid ${matched ? COLORS.sage : COLORS.line}` }}
+                      className="w-full rounded-2xl px-4 py-3 flex items-center gap-3 text-left"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
+                          #{b.orderNo} · {b.customerName || "ไม่ระบุชื่อ"}
+                        </p>
+                        <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
+                          {b.items.map((i) => `${i.name} × ${i.qty}`).join(", ")} · ฿{calcOrderTotal(b)}
+                        </p>
+                      </div>
+                      {matched && (
+                        <span style={{ background: COLORS.sageSoft, color: COLORS.sage }} className="text-[11px] font-bold px-2 py-1 rounded-full flex-shrink-0">
+                          ตรงกับของที่มี
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ยืนยันโอนของจากออร์เดอร์ที่ยกเลิก (A) ไปให้ออร์เดอร์ใหม่ (B) */}
+      {transferPair && (
+        <div
+          onClick={() => setTransferPair(null)}
+          style={{ background: "rgba(20,14,8,0.55)" }}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-3"
+        >
+          <SheetLock />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#FFFFFF" }}
+            className="w-full max-w-sm rounded-2xl p-5"
+          >
+            <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">เอาของให้ออร์เดอร์นี้เลยไหม?</p>
+            <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
+              ออร์เดอร์ #{orders.find((o) => o.id === transferPair.from)?.orderNo || ""} (ยกเลิก) → ออร์เดอร์ #
+              {orders.find((o) => o.id === transferPair.to)?.orderNo || ""} — ของจะไม่นับขาดทุน
+              และออร์เดอร์ใหม่จะไม่ตัดสต็อกซ้ำตอนทำเสร็จ
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTransferPair(null)}
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ไม่เอาแล้ว
+              </button>
+              <button
+                onClick={() => { onTransferGoods(transferPair.from, transferPair.to); setTransferPair(null); }}
+                style={{ background: COLORS.caramel, color: "#FFF9F0" }}
+                className="flex-1 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                ยืนยัน โอนของ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ชีตติ๊กเลือกออร์เดอร์ที่ยกเลิกที่จะลบ — ลบเฉพาะที่เลือก กันลบทั้งก้อนพลาด */}
       {deleteCancelPickOpen && (
         <div style={{ background: COLORS.cream }} className="fixed inset-0 z-40 flex flex-col">
@@ -5019,12 +5274,13 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
     preparing: { label: "กำลังทำ", color: "#B08628", bg: "#F5EAC9", action: null },
     done: { label: "เสร็จแล้ว", color: COLORS.sage, bg: COLORS.sageSoft, action: null },
     delivered: { label: "จัดส่งเสร็จแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
+    received: { label: "รับสินค้าแล้ว", color: "#FFFFFF", bg: COLORS.sage, action: null },
     cancelled: { label: "ยกเลิกแล้ว", color: "#C0533F", bg: "#F3D9D3", action: null },
   };
 
-  // คิวจัดส่งแสดงเฉพาะออร์เดอร์ที่ทำเสร็จแล้ว (พร้อมจัดส่ง) กับที่จัดส่งเสร็จแล้วแล้ว
+  // คิวจัดส่งแสดงเฉพาะออร์เดอร์ที่ทำเสร็จแล้ว (พร้อมจัดส่ง/พร้อมรับ) กับที่จบแล้ว (จัดส่งเสร็จ/รับสินค้าแล้ว)
   // ขั้นตอนใหม่: ออร์เดอร์เข้ามาที่หน้าออร์เดอร์ร้าน → กด "เสร็จแล้ว" → ถึงจะขึ้นมาที่นี่
-  const active = orders.filter((o) => o.status === "done" || o.status === "delivered");
+  const active = orders.filter((o) => o.status === "done" || o.status === "delivered" || o.status === "received");
 
   // ออร์เดอร์แบบรับที่ร้าน แยกไว้ต่างหาก — ไม่มีวันเวลาจัดส่ง
   const pickups = active.filter((o) => o.method === "pickup");
@@ -5049,7 +5305,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
   const renderCard = (order) => {
     const meta = statusMeta[order.status];
     const total = calcOrderTotal(order);
-    const isDelivered = order.status === "delivered";
+    const isDelivered = order.status === "delivered" || order.status === "received";
     return (
       <div
         key={order.id}
@@ -5105,6 +5361,17 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
           <PaymentStatusBadge order={order} onMarkPaid={onMarkPaid} onUnmarkPaid={onUnmarkPaid} />
         </div>
 
+        {/* ออเดอร์ที่ได้ของสำเร็จรูปมา (โอนจากออร์เดอร์ที่ยกเลิก) — บอกพนักงานว่าไม่ต้องทำใหม่ */}
+        {order.goodsFromOrderId && (
+          <div style={{ background: COLORS.sage, color: "#FFF9F0" }} className="rounded-xl px-3 py-2 mb-2.5 flex items-center gap-2">
+            <ArrowLeft size={14} className="flex-shrink-0" />
+            <span className="text-xs font-bold">
+              ของมาจากออร์เดอร์ #{orders.find((o) => o.id === order.goodsFromOrderId)?.orderNo || ""}
+            </span>
+            <span className="text-[11px] font-medium opacity-90 ml-auto flex-shrink-0">ไม่ต้องทำใหม่</span>
+          </div>
+        )}
+
         {/* รายการอาหาร */}
         <div className="space-y-1.5 mb-2.5">
           {order.items.map((i) => (
@@ -5155,7 +5422,9 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
                 style={{ background: COLORS.sage, color: "#FFF9F0" }}
                 className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
               >
-                <Truck size={12} /> กำลังจัดส่ง
+                {/* รับที่ร้าน: กด "รับสินค้าแล้ว" — ลูกค้ามารับของแล้ว | จัดส่ง: กด "กำลังจัดส่ง" */}
+                {order.method === "pickup" ? <ChefHat size={12} /> : <Truck size={12} />}{" "}
+                {order.method === "pickup" ? "รับสินค้าแล้ว" : "กำลังจัดส่ง"}
               </button>
             ) : (
               <button
@@ -5163,7 +5432,9 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
                 style={{ background: "#FFFFFF", color: COLORS.sage, border: `1px solid ${COLORS.sage}` }}
                 className="text-xs font-semibold px-3.5 py-2 rounded-full flex-shrink-0 active:scale-95 transition-transform flex items-center gap-1"
               >
-                <Truck size={12} /> จัดส่งเสร็จแล้ว
+                {/* กดซ้ำ = ย้อนกลับ (delivered/received → done) */}
+                {order.method === "pickup" ? <ChefHat size={12} /> : <Truck size={12} />}{" "}
+                {order.method === "pickup" ? "รับสินค้าแล้ว" : "จัดส่งเสร็จแล้ว"}
               </button>
             )}
           </div>
@@ -5226,10 +5497,10 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
           <SheetLock />
           <div onClick={() => setConfirmRevertId(null)} className="absolute inset-0 bg-black/30" />
           <div style={{ background: "#FFFFFF", borderRadius: 20 }} className="relative w-full max-w-xs p-5 text-center">
-            <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ย้อนกลับเป็นกำลังจัดส่ง?</p>
+            <p style={{ color: COLORS.ink }} className="text-sm font-bold mb-1">ย้อนกลับเป็นยังไม่จบ?</p>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mb-4">
-              ออร์เดอร์ #{orders.find((o) => o.id === confirmRevertId)?.orderNo || ""} จะกลับไปอยู่ในคิวจัดส่ง
-              และต้องกด "กำลังจัดส่ง" ใหม่อีกครั้ง — ยืนยันว่าจะย้อนกลับไหม?
+              ออร์เดอร์ #{orders.find((o) => o.id === confirmRevertId)?.orderNo || ""} จะกลับไปอยู่ในคิว
+              และต้องกด "กำลังจัดส่ง"/"รับสินค้าแล้ว" ใหม่อีกครั้ง — ยืนยันว่าจะย้อนกลับไหม?
             </p>
             <div className="flex gap-2">
               <button
@@ -6887,7 +7158,19 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     return [...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, [expenses, rangeStart]);
   const totalExpense = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const netProfit = grossProfit - totalExpense;
+  // ออร์เดอร์ที่ทำเสร็จแล้ว (ถึงสถานะ "เสร็จแล้ว") แล้วถูกยกเลิก — ต้นทุนวัตถุดิบที่เสียไปจริง ("เข้าเนื้อ")
+  // เอามาโชว์แยกบรรทัดเป็นขาดทุน ลดกำไรสุทธิ (ออร์เดอร์ที่ยกเลิกก่อนทำ ไม่นับ)
+  const cancelledMade = useMemo(() => {
+    const list = rangeStart === null ? orders : orders.filter((o) => o.createdAt >= rangeStart);
+    return list.filter(
+      (o) => o.status === "cancelled" && o.cancelledFrom === "done" && !o.goodsUsedByOrderId
+    );
+  }, [orders, rangeStart]);
+  const lostCost = cancelledMade.reduce(
+    (s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0),
+    0
+  );
+  const netProfit = grossProfit - totalExpense - lostCost;
 
   // สรุปแยกตามวิธีชำระเงิน (นับเฉพาะที่เก็บเงินได้แล้ว)
   const payStats = useMemo(() => {
@@ -6969,6 +7252,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     rows.push(["ต้นทุนวัตถุดิบ (บาท)", totalCost]);
     rows.push(["กำไรขั้นต้น (บาท)", grossProfit]);
     rows.push(["รายจ่ายรวม (บาท)", totalExpense]);
+    rows.push(["ต้นทุนออร์เดอร์ที่ทำแล้วยกเลิก (บาท)", lostCost]);
     rows.push(["กำไรสุทธิ (บาท)", netProfit]);
     rows.push([]);
     rows.push(["วิธีชำระเงิน", "จำนวนออร์เดอร์", "ยอดรวม (บาท)"]);
@@ -7331,6 +7615,17 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
           <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{totalExpense.toLocaleString()}</p>
         </div>
       </div>
+      {lostCost > 0 && (
+        <div
+          style={{ background: "#F3D9D3", color: "#8A3A2B", border: `1px solid #E3B7AC` }}
+          className="rounded-2xl px-4 py-3 mb-3 flex items-center justify-between gap-2"
+        >
+          <span className="text-sm font-semibold flex items-center gap-1.5 min-w-0">
+            <AlertTriangle size={15} className="flex-shrink-0" /> ต้นทุนออร์เดอร์ที่ทำแล้วยกเลิก ({cancelledMade.length} ออร์เดอร์)
+          </span>
+          <span className="text-base font-bold flex-shrink-0">-฿{lostCost.toLocaleString()}</span>
+        </div>
+      )}
       <div
         style={{ background: netProfit >= 0 ? COLORS.sageSoft : "#F3D9D3", color: netProfit >= 0 ? COLORS.sage : "#8A3A2B" }}
         className="rounded-2xl px-4 py-3 mb-5 flex items-center justify-between"
@@ -7769,6 +8064,11 @@ function App() {
   const prevOrderIdsRef = useRef(null);
   // เลขออร์เดอร์ล่าสุดที่เครื่องนี้สร้าง — กันเลขซ้ำกับออร์เดอร์ก่อนหน้าของเครื่องเดียวกัน (ถ้าซ้ำจริงจะ +1)
   const lastOrderNoRef = useRef(null);
+  // กันเสียงเตือนรัว: ออเดอร์ใหม่ที่เข้ามาในหน้าต่าง 30 วิ จะเตือนรวมกันครั้งเดียว (เสียง + พูดจำนวนรวม)
+  const NEW_ALERT_COOLDOWN_MS = 30000;
+  const lastNewAlertAtRef = useRef(0);
+  const pendingNewAlertRef = useRef(0);
+  const newAlertTimerRef = useRef(null);
 
   useEffect(() => {
     if (!FIREBASE_SYNC_ENABLED) return;
@@ -7790,10 +8090,26 @@ function App() {
               .filter((o) => !prevOrderIdsRef.current.has(o.id))
               .map((o) => o.id);
             if (newlyArrivedIds.length > 0 && staffUnlocked) {
-              playNewOrderAlert();
-              // พูดแจ้งเตือนเป็นประโยคด้วย — บอกจำนวนออเดอร์ใหม่ + เลขออเดอร์ (ถ้ามีออเดอร์เดียว)
-              const firstNew = newOrders.find((o) => newlyArrivedIds.includes(o.id));
-              speakNewOrderAlert(newlyArrivedIds.length, firstNew && firstNew.orderNo);
+              // กันเสียงรัว: ออเดอร์ใหม่ที่เข้ามาในหน้าต่าง 30 วิ จะเตือนรวมกันครั้งเดียว
+              pendingNewAlertRef.current += newlyArrivedIds.length;
+              const fireAlert = (orderNo) => {
+                playNewOrderAlert();
+                // พูดแจ้งเตือนเป็นประโยคด้วย — บอกจำนวนออเดอร์ใหม่ที่ยังค้างรวมกัน + เลขออเดอร์ (ถ้าออเดอร์เดียว)
+                speakNewOrderAlert(pendingNewAlertRef.current, orderNo);
+                lastNewAlertAtRef.current = Date.now();
+                pendingNewAlertRef.current = 0;
+              };
+              if (Date.now() - lastNewAlertAtRef.current >= NEW_ALERT_COOLDOWN_MS) {
+                const firstNew = newOrders.find((o) => newlyArrivedIds.includes(o.id));
+                fireAlert(firstNew && firstNew.orderNo);
+              } else if (!newAlertTimerRef.current) {
+                // ยังอยู่ในช่วง cooldown — รวมจำนวนแล้วตั้งเวลาเตือนเป็นชุดเมื่อครบ 30 วิ
+                const wait = NEW_ALERT_COOLDOWN_MS - (Date.now() - lastNewAlertAtRef.current);
+                newAlertTimerRef.current = setTimeout(() => {
+                  newAlertTimerRef.current = null;
+                  if (pendingNewAlertRef.current > 0) fireAlert(null);
+                }, wait);
+              }
               setRecentOrderIds((prev) => new Set([...prev, ...newlyArrivedIds]));
               setTimeout(() => {
                 setRecentOrderIds((prev) => {
@@ -7811,7 +8127,13 @@ function App() {
           console.error("Firestore orders subscription failed:", err);
         }
       );
-    return unsubscribe;
+    return () => {
+      if (newAlertTimerRef.current) {
+        clearTimeout(newAlertTimerRef.current);
+        newAlertTimerRef.current = null;
+      }
+      unsubscribe();
+    };
   }, [staffUnlocked]);
 
 
@@ -8383,17 +8705,24 @@ function App() {
   const advanceOrder = async (id) => {
     const order = orders.find((o) => o.id === id);
     if (!order) return;
-    // ลำดับสถานะ: new → preparing → done (กดจากหน้าออร์เดอร์ร้าน) → delivered (กดจากหน้าคิวจัดส่ง)
-    // ออร์เดอร์แบบรับที่ร้านจะหยุดที่ done — ลูกค้ามารับเอง ไม่ต้องผ่านหน้าจัดส่ง
-    // กดปุ่มจัดส่งเสร็จแล้วซ้ำอีกครั้ง (delivered → done) = ย้อนกลับ เผื่อกดผิด
+    // ลำดับสถานะ: new → preparing → done (กดจากหน้าออร์เดอร์ร้าน)
+    // → รับที่ร้าน: received (รับสินค้าแล้ว) / จัดส่ง: delivered (จัดส่งเสร็จแล้ว) — กดจากหน้าคิวจัดส่ง
+    // กดปุ่มซ้ำจาก delivered/received → done = ย้อนกลับ เผื่อกดผิด
     const next =
-      order.status === "new" ? "preparing" : order.status === "preparing" ? "done" : order.status === "delivered" ? "done" : "delivered";
+      order.status === "new"
+        ? "preparing"
+        : order.status === "preparing"
+        ? "done"
+        : order.status === "done"
+        ? (order.method === "pickup" ? "received" : "delivered")
+        : "done";
     // อัปเดต state ท้องถิ่นทันที (optimistic) — UI ตอบสนองไว ไม่ต้องรอ Firestore รอบกลับ
     // แล้วค่อยซิงก์ขึ้น Firestore ด้านหลัง (บนเครื่องที่มีสิทธิ์ อีกสักครู่ Firestore จะยืนยันสถานะเดียวกันอีกที)
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: next } : o)));
     // หักสต็อกอัตโนมัติตอนออเดอร์ทำเสร็จ (ใหม่ → กำลังทำ → เสร็จแล้ว) — ตามสูตรวัตถุดิบที่ผูกไว้กับเมนู
     // เฉพาะตอนเพิ่งเสร็จครั้งแรก (preparing → done) — ย้อนกลับจาก delivered → done จะไม่หักซ้ำ
-    if (next === "done" && order.status === "preparing") {
+    // ออเดอร์ที่ได้ของสำเร็จรูปมา (goodsFromOrderId) จะไม่หักซ้ำ — ของอีกใบตัดสต็อกไปแล้ว
+    if (next === "done" && order.status === "preparing" && !order.goodsFromOrderId) {
       deductStockForOrder(order);
     }
     if (FIREBASE_SYNC_ENABLED) {
@@ -8410,14 +8739,64 @@ function App() {
   // ยกเลิกออร์เดอร์ — เช่นลูกค้าโทรมายกเลิกที่ร้าน ต้องระบุสาเหตุด้วยเสมอ
   // อัปเดต state ท้องถิ่นทันที (optimistic) แล้วค่อยซิงก์ Firestore ด้านหลัง
   const cancelOrder = async (id, reason) => {
+    const order = orders.find((o) => o.id === id);
     const cancelReason = (reason || "").trim();
     const cancelledAt = Date.now();
-    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: "cancelled", cancelReason, cancelledAt } : o)));
+    // บันทึกสถานะตอนยกเลิก (cancelledFrom) — ใช้ในบัญชีว่าใบนี้เคยทำเสร็จแล้วหรือยัง
+    // (ยกเลิกจาก "เสร็จแล้ว" = ทำจริงแล้ว → ต้นทุนติดบัญชีเป็นขาดทุน)
+    const cancelledFrom = order ? order.status : "";
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: "cancelled", cancelReason, cancelledAt, cancelledFrom } : o)));
     if (FIREBASE_SYNC_ENABLED) {
       try {
-        await db.collection("orders").doc(id).update({ status: "cancelled", cancelReason, cancelledAt });
+        await db.collection("orders").doc(id).update({ status: "cancelled", cancelReason, cancelledAt, cancelledFrom });
       } catch (err) {
         console.error("Failed to cancel order:", err);
+      }
+    }
+  };
+
+  // ลูกค้ามารับของออร์เดอร์ที่ยกเลิกไปแล้ว — กดจากปุ่ม "ลูกค้ามารับของแล้ว" บนการ์ดที่ยกเลิก
+  // เปลี่ยนกลับเป็น "รับสินค้าแล้ว" (รับที่ร้าน) / "จัดส่งเสร็จแล้ว" (จัดส่ง) เพื่อนับรวมยอดขาย
+  // (ถ้ายังไม่จ่าย พนักงานกด "เก็บเงินแล้ว" ตามปกติ)
+  const reviveCancelledOrder = async (id) => {
+    const order = orders.find((o) => o.id === id);
+    if (!order || order.status !== "cancelled") return;
+    const next = order.method === "pickup" ? "received" : "delivered";
+    const completedAt = Date.now();
+    setOrders((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, status: next, cancelReason: "", cancelledFrom: "", completedAt } : o))
+    );
+    if (FIREBASE_SYNC_ENABLED) {
+      try {
+        await db.collection("orders").doc(id).update({ status: next, cancelReason: "", cancelledFrom: "", completedAt });
+      } catch (err) {
+        console.error("Failed to revive cancelled order:", err);
+      }
+    }
+  };
+
+  // เอาของที่ทำเสร็จแล้วของออร์เดอร์ที่ยกเลิก (A) ไปให้ออร์เดอร์ใหม่ (B) ที่สั่งรายการเดียวกัน
+  // A: กำกับ goodsUsedByOrderId → ไม่นับขาดทุนในบัญชี (ของไม่ได้ทิ้ง)
+  // B: กำกับ goodsFromOrderId → ตอน B ทำเสร็จจะไม่ตัดสต็อกซ้ำ (ของ A ตัดไปแล้วตอนทำ)
+  const transferGoods = async (id, targetId) => {
+    const order = orders.find((o) => o.id === id);
+    const target = orders.find((o) => o.id === targetId);
+    if (!order || !target || order.status !== "cancelled") return;
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === id
+          ? { ...o, goodsUsedByOrderId: targetId }
+          : o.id === targetId
+          ? { ...o, goodsFromOrderId: id }
+          : o
+      )
+    );
+    if (FIREBASE_SYNC_ENABLED) {
+      try {
+        await db.collection("orders").doc(id).update({ goodsUsedByOrderId: targetId });
+        await db.collection("orders").doc(targetId).update({ goodsFromOrderId: id });
+      } catch (err) {
+        console.error("Failed to transfer goods:", err);
       }
     }
   };
@@ -8771,6 +9150,8 @@ function App() {
             recentOrderIds={recentOrderIds}
             onAdvance={advanceOrder}
             onCancel={cancelOrder}
+            onRevive={reviveCancelledOrder}
+            onTransferGoods={transferGoods}
             onDelete={deleteOrder}
             onDeleteOrders={deleteOrdersByIds}
             onMarkPaid={markOrderPaid}
