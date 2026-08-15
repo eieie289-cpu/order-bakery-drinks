@@ -7663,7 +7663,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
           <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{totalExpense.toLocaleString()}</p>
         </div>
       </div>
-      {lostCost > 0 && (
+      {cancelledMade.length > 0 && (
         <div
           style={{ background: "#F3D9D3", color: "#8A3A2B", border: `1px solid #E3B7AC` }}
           className="rounded-2xl px-4 py-3 mb-3 flex items-center justify-between gap-2"
@@ -8845,6 +8845,22 @@ function App() {
         await db.collection("orders").doc(targetId).update({ goodsFromOrderId: id });
       } catch (err) {
         console.error("Failed to transfer goods:", err);
+        // เขียน Firestore ไม่สำเร็จ — ย้อนป้ายกลับในเครื่องให้ตรงกับระบบจริง แล้วแจ้งให้ลองใหม่
+        // (ไม่งั้น snapshot รอบถัดไปจะเอาป้ายกลับมา ทำให้การ์ด/บัญชีสลับไปมาเงียบ ๆ)
+        setOrders((prev) =>
+          prev.map((o) => {
+            if (o.id === id) {
+              const { goodsUsedByOrderId, ...rest } = o;
+              return rest;
+            }
+            if (o.id === targetId) {
+              const { goodsFromOrderId, ...rest } = o;
+              return rest;
+            }
+            return o;
+          })
+        );
+        alert("โอนของไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง");
       }
     }
   };
@@ -8880,6 +8896,16 @@ function App() {
           .update({ goodsFromOrderId: firebase.firestore.FieldValue.delete() });
       } catch (err) {
         console.error("Failed to undo goods transfer:", err);
+        // เขียน Firestore ไม่สำเร็จ — เอาป้ายกลับคืนให้ตรงกับระบบจริง แล้วแจ้งให้ลองใหม่
+        // (ไม่งั้น snapshot รอบถัดไปจะเอาป้ายกลับมา ทำให้การ์ด/บัญชีสลับไปมาเงียบ ๆ)
+        setOrders((prev) =>
+          prev.map((o) => {
+            if (o.id === id) return { ...o, goodsUsedByOrderId: targetId };
+            if (o.id === targetId) return { ...o, goodsFromOrderId: id };
+            return o;
+          })
+        );
+        alert("ยกเลิกการโอนไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง");
       }
     }
   };
