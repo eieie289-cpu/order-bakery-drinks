@@ -668,16 +668,32 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
       } else if (r.action === "bogo") {
         const X = Math.max(1, Number(r.actionAmount) || 2);
         let cnt = 0;
-        targets.forEach((c) => {
-          const unit = c.price;
-          let freeUnits = Math.floor((Number(c.qty) || 0) / X);
+        if (r.mixTargets) {
+          // คละเมนูได้ — รวมจำนวนชิ้นของทุกเมนูในเป้าหมายเป็นกองเดียว แล้วแถมของที่ "ถูกที่สุด"
+          // เป็นวิธีมาตรฐานที่ร้านทำกัน (ลูกค้าไม่ได้เลือกว่าตัวไหนฟรี แต่ร้านไม่ขาดทุนเกินจำเป็น)
+          const units = [];
+          targets.forEach((c) => {
+            const q = Number(c.qty) || 0;
+            for (let i = 0; i < q; i++) units.push(c.price);
+          });
+          units.sort((a, b) => a - b); // เรียงถูก→แพง ให้ตัวถูกสุดโดนฟรีก่อน
+          let freeUnits = Math.floor(units.length / X);
           if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
-          if (freeUnits > 0) {
-            baht += Math.round(freeUnits * unit * 100) / 100;
-            cnt += freeUnits;
-          }
-        });
-        label = `1แถม1 (ฟรี ${cnt} ชิ้น)`;
+          for (let i = 0; i < freeUnits; i++) baht += Math.round(units[i] * 100) / 100;
+          cnt = freeUnits;
+        } else {
+          // แบบเดิม — นับแยกทีละเมนู ต้องซื้อเมนูเดียวกันครบ X ชิ้นถึงจะได้ฟรีของเมนูนั้น
+          targets.forEach((c) => {
+            const unit = c.price;
+            let freeUnits = Math.floor((Number(c.qty) || 0) / X);
+            if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
+            if (freeUnits > 0) {
+              baht += Math.round(freeUnits * unit * 100) / 100;
+              cnt += freeUnits;
+            }
+          });
+        }
+        label = r.mixTargets ? `1แถม1 คละเมนู (ฟรี ${cnt} ชิ้น)` : `1แถม1 (ฟรี ${cnt} ชิ้น)`;
       } else if (r.action === "nth") {
         const N = Math.max(1, Number(r.actionN) || 2);
         let cnt = 0;
@@ -5674,6 +5690,7 @@ const emptyBuilderForm = () => ({
   addonMenuIds: [],
   action: "percent", // percent | baht | free | bogo | nth | combo
   amtVal: "",
+  mixTargets: false, // เฉพาะ action=bogo — true = นับรวมจำนวนชิ้นข้ามทุกเมนูที่เลือก (คละเมนูได้) แทนที่จะนับแยกทีละเมนู
   nthN: "",
   nthAmt: "",
   nthUnit: "percent",
@@ -5704,6 +5721,7 @@ const rulesToBuilderForm = (r, menu) => {
   }
   f.action = (r && r.action) || "percent";
   if (r && (r.action === "percent" || r.action === "baht" || r.action === "bogo")) f.amtVal = String(r.actionAmount || "");
+  if (r && r.action === "bogo") f.mixTargets = !!r.mixTargets;
   if (r && r.action === "nth") { f.nthN = String(r.actionN || ""); f.nthAmt = String(r.actionAmount || ""); f.nthUnit = r.actionUnit || "percent"; }
   if (r && r.action === "combo") { f.comboIds = [...(r.comboIds || [])]; f.comboMode = r.comboMode || "price"; f.comboPrice = String(r.actionAmount || ""); }
   f.limitVal = r && Number(r.limitMax) > 0 ? String(r.limitMax) : "";
@@ -5734,7 +5752,7 @@ const builderFormToRules = (f, menu) => {
     r.addonIds = resolveAddonIds(f.addonNames, f.addonScope, f.addonMenuIds, menu);
   }
   if (f.action === "percent" || f.action === "baht") r.actionAmount = Number(f.amtVal) || 0;
-  if (f.action === "bogo") r.actionAmount = Math.max(2, Math.floor(Number(f.amtVal)) || 2);
+  if (f.action === "bogo") { r.actionAmount = Math.max(2, Math.floor(Number(f.amtVal)) || 2); r.mixTargets = !!f.mixTargets; }
   if (f.action === "nth") { r.actionN = Math.max(2, Math.floor(Number(f.nthN)) || 2); r.actionAmount = Number(f.nthAmt) || 0; r.actionUnit = f.nthUnit; }
   if (f.action === "combo") { r.comboIds = [...f.comboIds]; r.comboMode = f.comboMode; r.actionAmount = Number(f.comboPrice) || 0; }
   return r;
@@ -5765,7 +5783,7 @@ const ruleDescribe = (r, menu) => {
   if (r.action === "percent") act = `ลด ${r.actionAmount}%`;
   else if (r.action === "baht") act = `ลด ฿${r.actionAmount}`;
   else if (r.action === "free") act = "ฟรี";
-  else if (r.action === "bogo") act = `1แถม1 (ฟรี 1 ทุก ${r.actionAmount} ชิ้น)`;
+  else if (r.action === "bogo") act = `1แถม1 (ฟรี 1 ทุก ${r.actionAmount} ชิ้น${r.mixTargets ? " คละเมนูได้" : ""})`;
   else if (r.action === "nth") act = `ชิ้นที่ ${r.actionN} ลด ${r.actionAmount}${r.actionUnit === "baht" ? " บาท" : "%"}`;
   else if (r.action === "combo") act = `ชุด ${(r.comboIds || []).map(mName).join(" + ")} ${r.comboMode === "price" ? `฿${r.actionAmount}/ชุด` : `ลด ${r.actionAmount}${r.comboMode === "percent" ? "%" : " บาท"}`}`;
   const limit = Number(r.limitMax) > 0 ? ` (สูงสุด ${r.limitMax} ชิ้น/ออร์เดอร์)` : "";
@@ -5969,7 +5987,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     else if (f.action === "percent") act = `ลด ${f.amtVal || "…"}%`;
     else if (f.action === "baht") act = `ลด ฿${f.amtVal || "…"}`;
     else if (f.action === "free") act = "ฟรี";
-    else if (f.action === "bogo") act = `ฟรี 1 ทุก ${f.amtVal || "…"} ชิ้น`;
+    else if (f.action === "bogo") act = `ฟรี 1 ทุก ${f.amtVal || "…"} ชิ้น${f.mixTargets ? " (คละเมนูได้)" : ""}`;
     else if (f.action === "nth") act = `ชิ้นที่ ${f.nthN || "…"} ลด ${f.nthAmt || "…"}${f.nthUnit === "baht" ? " บาท" : "%"}`;
     else if (f.action === "combo") {
       const cnames = f.comboIds.length ? f.comboIds.map((id) => menuNameById(menu, id)).join(" + ") : "…";
@@ -5986,6 +6004,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     if (f.action === "free" && f.target === "cart") return "⚠ ทำให้ยอดรวมทั้งออร์เดอร์ฟรีไม่ได้ — ฟรีใช้กับเมนู/ท็อปปิ้งเท่านั้น";
     if (f.action === "combo" && f.comboIds.length < 2) return `⚠ เลือกเมนูในชุดอย่างน้อย 2 ตัว (ตอนนี้ ${f.comboIds.length} ตัว)`;
     if ((f.action === "bogo" || f.action === "nth") && (f.target === "addons" || f.target === "cart")) return "⚠ 1แถม1 / ชิ้นที่N ใช้กับเมนูเท่านั้น — เปลี่ยนเป้าหมายเป็น 'เฉพาะเมนูที่เลือก'";
+    if (f.action === "bogo" && f.target === "items" && f.mixTargets && f.targetMenuIds.length < 2) return "💡 ติ๊กคละเมนูไว้ แต่เลือกเมนูไว้แค่ 1 ตัว — เลือกอย่างน้อย 2 เมนูถึงจะคละกันได้จริง";
     if (f.action === "nth" && f.target === "items") return "💡 'ชิ้นที่ N' นับต่อเมนูที่เลือก เช่น ชาไทยแก้ว 2 / ชาเขียวแก้ว 2";
     if (f.action === "combo" && !f.conds.includes("contains")) return "💡 ราคารวมชุด ควรต่อกับเงื่อนไข 'ต้องมีเมนู X ในตะกร้า' ด้วย (กำหนดเมนูในชุด)";
     if (f.conds.includes("minSpend") && f.conds.includes("minQty")) return "💡 เลือกเงื่อนไขซื้อครบแบบเดียว (บาท หรือ ชิ้น) จะชัดกว่า";
@@ -6432,6 +6451,22 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       {form.action === "percent" ? "%" : form.action === "bogo" ? "ชิ้น (ซื้อ X จ่าย X-1)" : "บาท"}
                     </span>
                   </div>
+                )}
+
+                {/* คละเมนูได้ — เฉพาะ 1แถม1 (bogo) เช่น "ซื้อ 2 คละเมนูในหมวดเบเกอรี่ แถม 1" แทนที่จะบังคับเมนูเดียวกัน 2 ชิ้น */}
+                {form.action === "bogo" && form.target !== "cart" && form.target !== "addons" && (
+                  <label className="mt-2 flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={form.mixTargets}
+                      onChange={(e) => setForm((f) => ({ ...f, mixTargets: e.target.checked }))}
+                      className="w-4 h-4 rounded"
+                      style={{ accentColor: COLORS.caramel }}
+                    />
+                    <span style={{ color: COLORS.ink }} className="text-xs font-medium">
+                      คละเมนูได้ (รวมทุกเมนูที่เลือกเป็นกองเดียว แถมชิ้นที่ถูกที่สุด)
+                    </span>
+                  </label>
                 )}
 
                 {form.action === "nth" && (
