@@ -2899,7 +2899,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
 }
 
 // ================= MENU MANAGER (staff) =================
-function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories }) {
+function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
   const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
   const [newOptionName, setNewOptionName] = useState({}); // groupId -> ชื่อตัวเลือกที่กำลังพิมพ์
@@ -3756,6 +3756,15 @@ function MenuManagerView({ menu, setMenu, menuLoaded, shopInfo, onSaveShopInfo, 
         </div>
       </div>
 
+      {menuSaveError && (
+        <div
+          className="rounded-xl px-4 py-3 text-sm font-medium mb-4 flex items-start gap-2"
+          style={{ background: "#FDECEC", color: "#9A2E2E", border: "1px solid #F3B9B9" }}
+        >
+          <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+          <span>{menuSaveError}</span>
+        </div>
+      )}
       {!menuLoaded && (
         <div className="text-center py-16" style={{ color: COLORS.inkSoft }}>
           กำลังโหลดเมนู...
@@ -7960,6 +7969,7 @@ function App() {
   const [salesRound, setSalesRound] = useState({ active: null, history: [] });
   const [staffMembers, setStaffMembers] = useState([]); // [{ uid, name }] รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids)
   const [menuLoaded, setMenuLoaded] = useState(!FIREBASE_SYNC_ENABLED); // เมนูโหลดจาก Firestore เสร็จแล้วหรือยัง
+  const [menuSaveError, setMenuSaveError] = useState(""); // ข้อความเตือนเมื่อบันทึกเมนูขึ้น Firestore ไม่สำเร็จ (เช่น เอกสารเกิน 1MB จากรูปเยอะ) — เดิมเงียบแค่ console.error พนักงานไม่รู้ว่าที่แก้ไปไม่ถูกบันทึกจริง
   const [cart, setCart] = useState([]);
   const [shopOpen, setShopOpen] = useState(true); // สถานะเปิด/ปิดร้าน — ซิงก์ผ่าน Firestore (config/shopStatus) เหมือนเมนู
   const [orders, setOrders] = useState([]);
@@ -8200,20 +8210,24 @@ function App() {
           if (doc.exists && Array.isArray(doc.data().items)) {
             setMenu(doc.data().items);
             seedIdCounter(doc.data().items); // กันเมนูใหม่ที่พนักงานสร้างได้ id ซ้ำกับของเดิม (บั๊ก id ซ้ำข้าม session)
+            setMenuLoaded(true); // ⚠️ บั๊กเดิม: ลืมเซ็ตค่านี้ตรงนี้ — เมนูโหลดมาแล้วจริง แต่หน้าจอค้างที่ "กำลังโหลดเมนู..."
+            //    ตลอดไป (ทั้งฝั่งลูกค้าและฝั่งพนักงาน) เพราะเงื่อนไข !menuLoaded ไม่เคยเป็น false
+            //    พนักงานเปิดหน้าจัดการเมนูแล้วเห็นแต่ข้อความ "กำลังโหลดเมนู..." เหมือนเมนูหายหมด
+            //    ทั้งที่จริงข้อมูลใน Firestore/ตัวแปร menu ยังอยู่ครบ — ถ้ากด "เพิ่มเมนูใหม่" ตอนนั้น
+            //    (ปุ่มนี้ไม่ได้ล็อกไว้ตาม menuLoaded) เมนูเดิมจะไม่หาย เพราะ setMenu ใช้ prev ที่มีของเดิมอยู่แล้ว
+            //    แต่ที่ "ดูเหมือน" เมนูหายทั้งร้านคือหน้าจอค้างโหลดไม่ยอมแสดงเมนูเดิมให้เห็นเลย
           } else {
-            // เอกสารยังไม่เคยถูกสร้าง (ร้านเพิ่งเชื่อม Firebase ครั้งแรก) — เอาเมนูตั้งต้นไปตั้งเป็นค่าเริ่มต้นให้
-            setMenu(initialMenu);
-            seedIdCounter(initialMenu);
-            db.collection("config").doc("menu").set({ items: initialMenu }).catch((err) => {
-              console.error("ตั้งค่าเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
-            });
+            // เอกสารยังไม่เคยถูกสร้าง (ร้านเพิ่งเชื่อม Firebase ครั้งแรก)
+            // ⚠️ ไม่เขียน initialMenu ลง Firebase อัตโนมัติ — กันกรณี permission error / เน็ตช้า
+            //    ทำให้ doc.exists = false ชั่วคราว แล้วเขียนทับเมนูจริงของร้าน
+            //    เมนูจะถูกสร้างใน Firebase ตอนพนักงานกดบันทึกเมนูครั้งแรกเอง
+            setMenuLoaded(true);
           }
-          setMenuLoaded(true);
         },
         (err) => {
           console.error("Firestore menu subscription failed:", err);
-          // อ่านเมนูไม่สำเร็จ (ยังไม่มีสิทธิ์ / เครือข่ายขัดข้อง) — ใช้เมนูตั้งต้นเป็นตัวสำรองให้แอปยังใช้งานได้
-          setMenu((prev) => (prev.length ? prev : initialMenu));
+          // ⚠️ ไม่ใส่ initialMenu เป็น fallback — ถ้าอ่านไม่สำเร็จ ปล่อยให้ menu ว่าง
+          //    (ถ้าใส่ initialMenu จะเสี่ยงเขียนทับเมนูจริงตอนท้าย)
           setMenuLoaded(true);
         }
       );
@@ -8396,10 +8410,10 @@ function App() {
           if (doc.exists && typeof doc.data().open === "boolean") {
             setShopOpen(doc.data().open);
           } else {
-            // เอกสารยังไม่เคยถูกสร้าง — ตั้งค่าเริ่มต้นเป็น "เปิดร้าน"
-            db.collection("config").doc("shopStatus").set({ open: true }).catch((err) => {
-              console.error("ตั้งค่าสถานะร้านเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
-            });
+            // เอกสารยังไม่เคยถูกสร้าง — ไม่เขียนค่าเริ่มต้นอัตโนมัติ
+            // ⚠️ กันกรณี permission error ชั่วคราวทำให้ doc.exists = false แล้วเขียนทับ
+            //    สถานะร้านจะถูกสร้างตอนพนักงานกดเปิด/ปิดร้านครั้งแรกเอง
+            setShopOpen(true); // แสดงเป็น "เปิดร้าน" ในเครื่องนี้ (ไม่แตะ Firebase)
           }
         },
         (err) => {
@@ -8484,10 +8498,9 @@ function App() {
           if (doc.exists && Array.isArray(doc.data().items) && doc.data().items.length > 0) {
             setCategories(doc.data().items);
           } else {
-            // เอกสารยังไม่เคยถูกสร้าง — ตั้งหมวดเริ่มต้นให้
-            db.collection("config").doc("categories").set({ items: DEFAULT_CATEGORIES }).catch((err) => {
-              console.error("ตั้งค่าหมวดเมนูเริ่มต้นใน Firestore ไม่สำเร็จ:", err);
-            });
+            // เอกสารยังไม่เคยถูกสร้าง — ไม่เขียนค่าเริ่มต้นอัตโนมัติ
+            // ⚠️ กันกรณี permission error ชั่วคราวทำให้ doc.exists = false แล้วเขียนทับข้อมูลจริง
+            //    หมวดจะถูกสร้างใน Firebase ตอนพนักงานกดบันทึกหมวดครั้งแรกเอง
           }
         },
         (err) => {
@@ -8648,14 +8661,31 @@ function App() {
   // เขียนเมนูกลับขึ้น Firestore ทุกครั้งที่พนักงานแก้ (เพิ่ม/แก้ไข/ลบ/เปิดปิดขาย)
   // ห่อ setMenu เดิมไว้ชั้นหนึ่ง — MenuManagerView เรียกใช้เหมือนเดิมทุกอย่าง ไม่ต้องแก้โค้ดฝั่งนั้น
   const updateMenu = (updater) => {
+    // ⚠️ กันบั๊กร้ายแรง: ถ้าเมนูจาก Firestore ยังโหลดไม่เสร็จ (เช่น เน็ตช้า/หลุดตอนเพิ่งเปิดแอป)
+    // ตัวแปร menu ในเครื่องตอนนั้นยังเป็น [] (ว่าง) อยู่ — ถ้าพนักงานดันแก้ไข/เพิ่มเมนูในจังหวะนี้พอดี
+    // โค้ดจะเอาเมนูว่างมาบวกของใหม่ แล้ว .set() ทับทั้งเอกสารบน Firestore ทำให้เมนูเก่าทั้งร้านหายจริง
+    // (ไม่ใช่แค่หายในหน้าจอ) จึงต้องกันไว้ไม่ให้เขียนอะไรขึ้นเซิร์ฟเวอร์จนกว่าจะยืนยันว่าโหลดเมนูจริงมาแล้ว
+    if (FIREBASE_SYNC_ENABLED && !menuLoaded) {
+      setMenuSaveError("ระบบกำลังซิงค์เมนูจากเซิร์ฟเวอร์ กรุณารอสักครู่แล้วลองใหม่ (ป้องกันเมนูเก่าหายจากการบันทึกทับ)");
+      return; // ไม่แก้แม้แต่ในเครื่อง กันพนักงานเข้าใจผิดว่าบันทึกแล้ว
+    }
     setMenu((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       // กดย้ายขึ้น/ลงซ้ำตอนอยู่ขอบ (บนสุด/ล่างสุด) — ลำดับไม่เปลี่ยนจริง (next === prev)
       // ข้ามการเขียน Firestore เลย กัน write + read ฟรีโดยไม่ได้เปลี่ยนอะไร
       if (next === prev) return prev;
       if (FIREBASE_SYNC_ENABLED) {
+        setMenuSaveError(""); // เคลียร์ error เก่าไว้ก่อน — ถ้าครั้งนี้เขียนสำเร็จจะได้ไม่ค้างข้อความเตือนเดิม
         db.collection("config").doc("menu").set({ items: next }).catch((err) => {
           console.error("บันทึกเมนูขึ้น Firestore ไม่สำเร็จ:", err);
+          // ⚠️ เดิมเงียบแค่ console.error — พนักงานเห็นเมนูเปลี่ยนในเครื่องตัวเอง (optimistic UI)
+          // แต่จริง ๆ ยังไม่ถูกบันทึกขึ้น Firestore เลย พอปิดแอป/เปิดใหม่ค่าจะหลุดกลับไปเป็นของเก่า
+          // เช่น เอกสารเมนูรวมทั้งร้านเกิน 1MB (รูปเยอะเกินไป) หรือเน็ตหลุดตอนบันทึก
+          setMenuSaveError(
+            err && err.code === "resource-exhausted"
+              ? "บันทึกเมนูไม่สำเร็จ: ข้อมูลเมนูรวมกันใหญ่เกิน 1MB (รูปเมนูเยอะเกินไป) กรุณาลดขนาด/จำนวนรูปแล้วลองใหม่"
+              : "บันทึกเมนูขึ้นเซิร์ฟเวอร์ไม่สำเร็จ การแก้ไขนี้อาจหายไปถ้าปิดแอป — ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง"
+          );
         });
       }
       return next;
@@ -9276,6 +9306,7 @@ function App() {
             menu={menu}
             setMenu={updateMenu}
             menuLoaded={menuLoaded}
+            menuSaveError={menuSaveError}
             shopInfo={shopInfo}
             onSaveShopInfo={saveShopInfo}
             stockItems={stockItems}
