@@ -1162,23 +1162,33 @@ function playNewOrderAlert() {
 // จะใช้เสียงเริ่มต้นแทน) — บางเบราว์เซอร์ต้องมีการแตะหน้าจอมาก่อน 1 ครั้งถึงจะพูดได้
 // ซึ่งพนักงานกด PIN เข้ามาแล้วนับว่าแตะแล้ว ถ้าเครื่องไหนพูดไม่ได้ก็เงียบ ๆ ไม่มีผลกับแอป
 const THAI_NUM_WORDS = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+const THAI_DIGIT_WORDS = ["ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+// อ่านเลขออร์เดอร์ทีละหลัก (เช่น 123 -> "หนึ่ง สอง สาม") กันไม่ให้เครื่องอ่านรวบเป็นจำนวนเต็ม
+// (เช่น "หนึ่งแสนสองหมื่นสามพัน") ซึ่งฟังยากและช้ากว่าการอ่านทีละตัว
+function speakOrderNoDigits(orderNo) {
+  return String(orderNo)
+    .split("")
+    .map((ch) => (ch >= "0" && ch <= "9" ? THAI_DIGIT_WORDS[Number(ch)] : ""))
+    .filter(Boolean)
+    .join(" ");
+}
 function speakNewOrderAlert(count, orderNo) {
   try {
     if (!window.speechSynthesis) return;
-    // สร้างประโยค: 1 ออเดอร์ -> "มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ 123456" / หลายออเดอร์ -> "มีออเดอร์ใหม่เข้ามา 3 ออเดอร์"
+    // สร้างประโยค: 1 ออเดอร์ -> "มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ 1 2 3 4 5 6" (อ่านทีละหลัก) / หลายออเดอร์ -> "มีออเดอร์ใหม่เข้ามา 3 ออเดอร์"
     let text;
     const n = Number(count) || 1;
     if (n > 1) {
       const word = n <= 9 ? THAI_NUM_WORDS[n] : String(n);
       text = `มีออเดอร์ใหม่เข้ามา ${word} ออเดอร์`;
     } else if (orderNo) {
-      text = `มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ ${orderNo}`;
+      text = `มีออเดอร์ใหม่เข้ามา ออเดอร์ที่ ${speakOrderNoDigits(orderNo)}`;
     } else {
       text = "มีออเดอร์ใหม่เข้ามา";
     }
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "th-TH";
-    utter.rate = 1;
+    utter.rate = 1.35;
     utter.pitch = 1.1;
     // เลือกเสียงไทยถ้ามี (getVoices อาจยังว่างตอนโหลดแรก — ถ้าไม่มีก็ปล่อยให้ใช้เสียงเริ่มต้น)
     const voices = window.speechSynthesis.getVoices();
