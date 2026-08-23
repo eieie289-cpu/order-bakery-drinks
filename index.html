@@ -493,11 +493,12 @@ const discountBahtFor = (itemId, promos) =>
 
 // ราคาเมนูหลังหักส่วนลด (หัก % ก่อน แล้วค่อยหักบาท — ปัดเป็นสตางค์)
 // รวมทั้งโปรเก่า (type=discount) และโปรตัวต่อ (rules — หักเฉพาะแบบหน่วยที่เช็คเงื่อนไขเวลา/วันได้)
-const effectiveItemPrice = (item, promos) => {
+// now: timestamp ที่ใช้เช็คเงื่อนไขเวลา/วัน — ส่งเข้ามาจาก state ที่ tick เองได้ (ไม่งั้นราคาจะค้างจนกว่าจะมี re-render อื่น)
+const effectiveItemPrice = (item, promos, now) => {
   if (!item) return 0;
   let pct = discountPercentFor(item.id, promos);
   let baht = discountBahtFor(item.id, promos);
-  const ru = ruleUnitDiscountFor(item.id, promos, Date.now());
+  const ru = ruleUnitDiscountFor(item.id, promos, now || Date.now());
   pct = Math.max(pct, ru.pct);
   baht = Math.max(baht, ru.baht);
   let price = item.price;
@@ -507,11 +508,11 @@ const effectiveItemPrice = (item, promos) => {
 };
 
 // ป้ายส่วนลดบนการ์ดเมนู เช่น "-10%" หรือ "-฿5" (ถ้ามีทั้งสองอย่างแสดงรวมกัน)
-const discountLabelFor = (item, promos) => {
+const discountLabelFor = (item, promos, now) => {
   if (!item) return "";
   let pct = discountPercentFor(item.id, promos);
   let baht = discountBahtFor(item.id, promos);
-  const ru = ruleUnitDiscountFor(item.id, promos, Date.now());
+  const ru = ruleUnitDiscountFor(item.id, promos, now || Date.now());
   pct = Math.max(pct, ru.pct);
   baht = Math.max(baht, ru.baht);
   if (pct > 0 && baht > 0) return `-${pct}% -฿${baht}`;
@@ -521,16 +522,16 @@ const discountLabelFor = (item, promos) => {
 };
 
 // ตัวเลือกเพิ่มนี้ฟรีไหม (โปรเก่า freeAddOn + โปรตัวต่อแบบท็อปปิ้งฟรี — ตรงกับเมนู)
-const isAddOnFree = (itemId, optionId, promos) =>
+const isAddOnFree = (itemId, optionId, promos, now) =>
   (promos || []).some(
     (p) =>
       p && p.active && p.type === "freeAddOn" &&
       (!p.itemIds || p.itemIds.length === 0 || p.itemIds.includes(itemId)) &&
       (p.addOnIds || []).includes(optionId)
-  ) || ruleIsAddOnFree(itemId, optionId, promos, Date.now());
+  ) || ruleIsAddOnFree(itemId, optionId, promos, now || Date.now());
 
-const effectiveAddOnPrice = (itemId, option, promos) =>
-  isAddOnFree(itemId, option && option.id, promos) ? 0 : Number((option && option.price) || 0);
+const effectiveAddOnPrice = (itemId, option, promos, now) =>
+  isAddOnFree(itemId, option && option.id, promos, now) ? 0 : Number((option && option.price) || 0);
 
 // ================= โปรโมชั่นแบบตัวต่อ (rule-based) =================
 // โปรใหม่เก็บในฟิลด์ rules: { conds:[], code, minSpendTiers:[{min,amount}], minQtyTiers:[],
@@ -1248,6 +1249,13 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
   // (ข้อมูลเก่าที่บันทึกด้วยบั๊ก id ซ้ำ) ทำให้กดตัวเลือกหนึ่งแล้วไปติ๊กอีกตัวเลือกในกลุ่มอื่นตาม
   const [selectedAddOnKeys, setSelectedAddOnKeys] = useState([]);
   const [editingCartId, setEditingCartId] = useState(null); // กำลังแก้ไขรายการในตะกร้าอันไหน (null = เพิ่มใหม่)
+  // เวลาปัจจุบัน (อัปเดตทุก 30 วินาที) — ใช้เช็คโปรโมชั่นแบบ "เฉพาะช่วงเวลา/วัน" ที่หน้าเมนู
+  // ไม่งั้นราคา/ป้ายส่วนลดจะค้างจนกว่าจะมีอะไรอื่นทำให้หน้าจอ re-render เอง
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   const tabs = ["all", ...(categories || DEFAULT_CATEGORIES).map((c) => c.id)];
   // แสดงเมนูทุกตัว (รวมตัวที่สินค้าหมด — จะแสดงจาง ๆ + กดสั่งไม่ได้) ไม่กรองเมนูที่ `active: false` ออก
@@ -1263,7 +1271,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
       : item.id;
     // ราคาเมนูหลังหักโปรโมชั่นลดราคา + ตัวเลือก (ตัวที่ฟรีจากโปรโมชั่นท็อปปิ้งฟรีจะคิด ฿0)
     const unitPrice =
-      effectiveItemPrice(item, promos) +
+      effectiveItemPrice(item, promos, nowTs) +
       selectedAddOns.reduce((s, a) => s + (Number(a.price) || 0), 0);
     setCart((prev) => {
       const existing = prev.find((c) => c.cartId === cartId);
@@ -1316,7 +1324,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
     // ใช้ราคาหลังโปรโมชั่นท็อปปิ้งฟรีเหมือนที่แสดงในชีต (ตัวที่ฟรีจะคิด ฿0 ในตะกร้า)
     // เดิมใช้ราคาเต็มของตัวเลือก ทำให้ท็อปปิ้งที่โชว์ "ฟรี" ยังโดนคิดเงินในตะกร้า
     const allOptions = groups.flatMap((g) =>
-      (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos) }))
+      (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos, nowTs) }))
     );
     const selected = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
     if (editingCartId) {
@@ -1360,7 +1368,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
       ? `${menuItem.id}::${selected.map((a) => a.id).sort().join(",")}`
       : menuItem.id;
     const unitPrice =
-      effectiveItemPrice(menuItem, promos) +
+      effectiveItemPrice(menuItem, promos, nowTs) +
       selected.reduce((s, a) => s + (Number(a.price) || 0), 0);
     setCart((prev) => {
       const withoutOld = prev.filter((c) => c.cartId !== oldCartId);
@@ -1490,7 +1498,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
           // สินค้าหมด = ลูกค้ายังเห็นเมนูอยู่ แต่จางลง + กดสั่งไม่ได้ (พนักงานปิดที่ฟอร์มแก้ไขเมนู)
           const soldOut = item.active === false;
           // ราคาหลังโปรโมชั่นลดราคาเมนู (ถ้ามี) — แสดงราคาเดิมขีดฆ่า + ป้าย %
-          const discountedPrice = effectiveItemPrice(item, promos);
+          const discountedPrice = effectiveItemPrice(item, promos, nowTs);
           const hasDiscount = discountedPrice < item.price;
           // สำหรับเมนูที่ไม่มีตัวเลือกเพิ่ม ใช้ cartId ตรงกับ item.id ตรง ๆ (พฤติกรรมเดิม)
           const inCart = !hasAddOns ? cart.find((c) => c.cartId === item.id) : null;
@@ -1549,7 +1557,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                     ฿{discountedPrice}
                     {hasDiscount && (
                       <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
-                        {discountLabelFor(item, promos)}
+                        {discountLabelFor(item, promos, nowTs)}
                       </span>
                     )}
                   </span>
@@ -1632,7 +1640,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 />
               )}
               <p style={{ color: COLORS.inkSoft }} className="text-sm leading-relaxed mb-2">{detailFor.desc}</p>
-              <p style={{ color: COLORS.caramelDark }} className="font-bold text-lg mb-4">฿{effectiveItemPrice(detailFor, promos)}</p>
+              <p style={{ color: COLORS.caramelDark }} className="font-bold text-lg mb-4">฿{effectiveItemPrice(detailFor, promos, nowTs)}</p>
               {dInCart ? (
                 <div className="flex items-center justify-between">
                   <span style={{ color: COLORS.inkSoft }} className="text-sm">จำนวนในตะกร้า</span>
@@ -1644,7 +1652,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 </div>
               ) : (
                 <PrimaryButton full onClick={() => addToCart(detailFor)}>
-                  เพิ่มลงตะกร้า ฿{effectiveItemPrice(detailFor, promos)}
+                  เพิ่มลงตะกร้า ฿{effectiveItemPrice(detailFor, promos, nowTs)}
                 </PrimaryButton>
               )}
             </div>
@@ -1668,7 +1676,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
         const groups = normalizeAddOnGroups(addOnSheetFor.addOns);
         // ราคาแต่ละตัวเลือกหลังใช้โปรโมชั่นท็อปปิ้งฟรี — ตัวที่ฟรีจะกลายเป็น ฿0
         const allOptions = groups.flatMap((g) =>
-          (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos) }))
+          (g.options || []).map((o) => ({ ...o, gid: g.id, price: effectiveAddOnPrice(addOnSheetFor.id, o, promos, nowTs) }))
         );
         const selectedOptions = allOptions.filter((a) => selectedAddOnKeys.includes(`${a.gid}::${a.id}`));
         // กลุ่มที่บังคับเลือก ต้องมีตัวเลือกอย่างน้อย 1 รายการที่ถูกเลือก ถึงจะกดยืนยันได้
@@ -1742,8 +1750,8 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                           >
                             <span style={{ color: COLORS.ink }} className="text-sm font-medium">{a.name}</span>
                             <span className="flex items-center gap-2.5">
-                              <span style={{ color: isAddOnFree(addOnSheetFor.id, a.id, promos) ? COLORS.sage : COLORS.caramelDark }} className="text-xs font-bold">
-                                {isAddOnFree(addOnSheetFor.id, a.id, promos) ? "ฟรี" : `+฿${a.price}`}
+                              <span style={{ color: isAddOnFree(addOnSheetFor.id, a.id, promos, nowTs) ? COLORS.sage : COLORS.caramelDark }} className="text-xs font-bold">
+                                {isAddOnFree(addOnSheetFor.id, a.id, promos, nowTs) ? "ฟรี" : `+฿${a.price}`}
                               </span>
                               <div
                                 style={{
@@ -1770,7 +1778,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
               )}
               <PrimaryButton full onClick={confirmAddOnSheet} disabled={missingRequired}>
                 {editingCartId ? "บันทึกการแก้ไข" : "เพิ่มลงตะกร้า"} · ฿
-                {effectiveItemPrice(addOnSheetFor, promos) + selectedOptions.reduce((s, a) => s + (Number(a.price) || 0), 0)}
+                {effectiveItemPrice(addOnSheetFor, promos, nowTs) + selectedOptions.reduce((s, a) => s + (Number(a.price) || 0), 0)}
               </PrimaryButton>
             </div>
           </div>
@@ -1939,14 +1947,18 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const custFormRef = useRef(null);
   const dateOptions = useMemo(() => upcomingDateOptions(7), []);
   // เวลาปัจจุบัน (อัปเดตทุก 30 วินาที) — วันนี้จะปัดช่วงเวลาที่ผ่านไปแล้วออกจากตัวเลือก
+  // nowTs (timestamp ตัวเลข) ใช้ตรวจโปรโมชั่นแบบ "เฉพาะช่วงเวลา/วัน" ด้วย — ให้ส่วนลดในตะกร้า
+  // อัปเดตเองเมื่อเวลาข้ามเงื่อนไข โดยไม่ต้องรอให้ลูกค้าแก้ตะกร้าก่อนถึงจะรีเฟรช
   const [nowStr, setNowStr] = useState(() => {
     const d = new Date();
     return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   });
+  const [nowTs, setNowTs] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => {
       const d = new Date();
       setNowStr(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`);
+      setNowTs(d.getTime());
     }, 30000);
     return () => clearInterval(t);
   }, []);
@@ -1996,7 +2008,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
     code: promoCode,
     subtotal,
     cart,
-    now: Date.now(),
+    now: nowTs,
   });
   const discountBaht = codeBaht + byocBaht + thresholdBaht + ruleCartDiscount.baht;
   const total = Math.max(0, subtotal - discountBaht);
@@ -5709,6 +5721,8 @@ const emptyBuilderForm = () => ({
   comboPrice: "",
   limitVal: "",
   pickupOnly: true, // เก็บของโปรนำแก้วมาเองเดิม (ไม่โชว์ในฟอร์ม แต่ไม่ให้หายตอนแก้)
+  maxUsesVal: "", // จำกัดจำนวนครั้งที่ใช้โค้ดได้ทั้งหมด ("" = ไม่จำกัด)
+  perCustomer: false, // จำกัด 1 ครั้งต่อลูกค้า
 });
 // rules → ฟอร์มตัวต่อ (เปิดแก้โปรเดิม/โปรตัวต่อ)
 const rulesToBuilderForm = (r, menu) => {
@@ -5736,6 +5750,12 @@ const rulesToBuilderForm = (r, menu) => {
   if (r && r.action === "combo") { f.comboIds = [...(r.comboIds || [])]; f.comboMode = r.comboMode || "price"; f.comboPrice = String(r.actionAmount || ""); }
   f.limitVal = r && Number(r.limitMax) > 0 ? String(r.limitMax) : "";
   f.pickupOnly = !r || r.pickupOnly !== false;
+  return f;
+};
+// โปรที่มีอยู่ (maxUses/perCustomer เก็บอยู่นอก rules ที่ระดับโปรโมชั่น) → ฟอร์มตัวต่อ
+const promoUsageToBuilderForm = (f, promo) => {
+  f.maxUsesVal = promo && Number(promo.maxUses) > 0 ? String(promo.maxUses) : "";
+  f.perCustomer = !!(promo && promo.perCustomer);
   return f;
 };
 // ฟอร์มตัวต่อ → โครงสร้าง rules (บันทึก)
@@ -5857,6 +5877,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     const f = rulesToBuilderForm(r, menu);
     f.name = p.name || "";
     f.active = p.active !== false;
+    promoUsageToBuilderForm(f, p);
     setForm(f);
   };
 
@@ -5878,6 +5899,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     const f = form;
     if (!f.name.trim()) return "ตั้งชื่อโปรโมชั่นก่อน";
     if (f.conds.includes("code") && !f.codeVal.trim()) return "กรอกโค้ดส่วนลด";
+    if (f.conds.includes("code") && f.maxUsesVal.trim() && !(Number(f.maxUsesVal) > 0)) return "จำกัดจำนวนใช้โค้ดต้องเป็นตัวเลขมากกว่า 0";
     if (f.conds.includes("minSpend") && !f.spendTiers.some((x) => Number(x.t) > 0 && Number(x.d) > 0)) return "กรอกขั้นซื้อครบให้ครบ (ยอดขั้นต่ำ + จำนวนที่ลด)";
     if (f.conds.includes("minQty") && !f.qtyTiers.some((x) => Number(x.t) > 0 && Number(x.d) > 0)) return "กรอกขั้นซื้อครบชิ้นให้ครบ (จำนวนชิ้น + จำนวนที่ลด)";
     if (f.conds.includes("contains") && f.containsIds.length === 0) return "เลือกเมนูที่จะต้องมีในตะกร้า";
@@ -5919,8 +5941,8 @@ function StaffPromoView({ promos, updatePromos, menu }) {
       pickupOnly: true,
       uses: existing && Number(existing.uses) > 0 ? Number(existing.uses) : 0,
       usedBy: existing && Array.isArray(existing.usedBy) ? existing.usedBy : [],
-      maxUses: existing ? Number(existing.maxUses) || 0 : 0,
-      perCustomer: existing ? !!existing.perCustomer : false,
+      maxUses: Number(form.maxUsesVal) > 0 ? Math.max(1, Math.floor(Number(form.maxUsesVal))) : 0,
+      perCustomer: !!form.perCustomer,
     };
     updatePromos((prev) => (editing === "new" ? [...prev, promo] : prev.map((p) => (p.id === editing ? promo : p))));
     setEditing(null);
@@ -5975,7 +5997,11 @@ function StaffPromoView({ promos, updatePromos, menu }) {
   const builderSummary = useMemo(() => {
     const f = form;
     const parts = [];
-    if (f.conds.includes("code")) parts.push(`กรอกโค้ด ${f.codeVal ? f.codeVal.toUpperCase() : "…"}`);
+    if (f.conds.includes("code")) {
+      parts.push(`กรอกโค้ด ${f.codeVal ? f.codeVal.toUpperCase() : "…"}`);
+      if (Number(f.maxUsesVal) > 0) parts.push(`ใช้ได้รวม ${f.maxUsesVal} ครั้ง`);
+      if (f.perCustomer) parts.push("จำกัด 1 ครั้ง/คน");
+    }
     if (f.conds.includes("minSpend")) parts.push(`ซื้อครบ ${f.spendTiers.filter((x) => Number(x.t) > 0).map((x) => `฿${x.t}→฿${x.d || "…"}`).join(" / ")}`);
     if (f.conds.includes("minQty")) parts.push(`ซื้อครบ ${f.qtyTiers.filter((x) => Number(x.t) > 0).map((x) => `${x.t}ชิ้น→฿${x.d || "…"}`).join(" / ")}`);
     if (f.conds.includes("contains")) parts.push(`ต้องมี ${f.containsIds.length ? f.containsIds.map((id) => menuNameById(menu, id)).join(" + ") : "เมนูที่เลือก"} ในตะกร้า`);
@@ -6195,6 +6221,35 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                     />
                     <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">ลูกค้ากรอกโค้ดนี้ที่หน้าชำระเงินเพื่อรับส่วนลด</p>
+
+                    <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">จำกัดจำนวนใช้โค้ด (รวมทุกคน)</label>
+                    <input
+                      value={form.maxUsesVal}
+                      onChange={(e) => setForm((f) => ({ ...f, maxUsesVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                      placeholder="ไม่ระบุ = ไม่จำกัด"
+                      inputMode="numeric"
+                      className="w-32 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
+                      style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
+                    />
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1">เช่น 50 = โค้ดนี้ใช้ได้รวมกัน 50 ครั้ง (ทุกลูกค้ารวมกัน) แล้วปิดอัตโนมัติ</p>
+
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, perCustomer: !f.perCustomer }))}
+                      className="flex items-center gap-2 mt-3"
+                    >
+                      <span
+                        className="w-5 h-5 rounded-md flex items-center justify-center"
+                        style={{
+                          border: `1.5px solid ${form.perCustomer ? COLORS.caramel : COLORS.line}`,
+                          background: form.perCustomer ? COLORS.caramel : "#fff",
+                        }}
+                      >
+                        {form.perCustomer && <span style={{ color: "#fff" }} className="text-xs leading-none">✓</span>}
+                      </span>
+                      <span style={{ color: COLORS.ink }} className="text-sm">จำกัด 1 ครั้งต่อลูกค้า</span>
+                    </button>
+                    <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-1 ml-7">ลูกค้าคนเดิมใช้โค้ดนี้ซ้ำไม่ได้ (เช่น โค้ดเพื่อนแนะนำ)</p>
                   </div>
                 )}
 
