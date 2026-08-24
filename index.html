@@ -209,6 +209,8 @@ const nextAddOnId = () => `ao${addOnIdCounter++}`;
 const toArabicDigits = (s) => String(s || "").replace(/[๐-๙]/g, (d) => "๐๑๒๓๔๕๖๗๘๙".indexOf(d));
 // ใช้แทน .replace(/[^0-9]/g, "") ตรงๆ ในช่องตัวเลขของฟอร์มตัวต่อโปรโมชั่น — รองรับทั้งเลขอารบิกและเลขไทย
 const digitsOnly = (s) => toArabicDigits(s).replace(/[^0-9]/g, "");
+// เหมือน digitsOnly แต่เก็บจุดทศนิยมไว้ด้วย — ใช้กับช่องที่กรอกทศนิยมได้ (ต้นทุน/หน่วย, จำนวนสต็อก, สูตรวัตถุดิบ)
+const decimalDigitsOnly = (s) => toArabicDigits(s).replace(/[^0-9.]/g, "");
 // โชว์ราคา/ยอดเงินให้อ่านง่าย — ถ้ามีเศษสตางค์ (เช่นจากส่วนลด %) บังคับ 2 ตำแหน่งทศนิยมเสมอ (40.50 ไม่ใช่ 40.5)
 // แต่ถ้าเป็นจำนวนเต็มพอดี (ราคาปกติส่วนใหญ่) โชว์แบบจำนวนเต็มตามเดิม ไม่ใส่ .00 ให้รกจอ
 // ใส่ , คั่นหลักพันให้เผื่อกรณีตัวเลขใหญ่ (ยอดขายรวม ฯลฯ)
@@ -1772,7 +1774,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                       </span>
                     </div>
                     <div className="space-y-2">
-                      {[...(g.options || [])].sort((a, b) => a.price - b.price).map((a) => {
+                      {(g.options || []).map((a) => {
                         const checked = selectedAddOnKeys.includes(`${g.id}::${a.id}`);
                         return (
                           <button
@@ -3405,6 +3407,11 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
       document.removeEventListener("touchmove", onMove);
       document.removeEventListener("touchend", onEnd);
       document.removeEventListener("touchcancel", onCancel);
+      // ถ้าคอมโพเนนต์ unmount ระหว่างกำลังลากอยู่ (เช่น สลับแท็บพนักงานกลางคัน) ต้องเก็บกวาด ghost element
+      // และ pending long-press timer ด้วย ไม่งั้น ghost จะค้างอยู่บนจอ (ติดอยู่ที่ document.body ตรง ๆ
+      // ไม่ได้อยู่ใน React tree เลย unmount ปกติไม่ช่วยเก็บให้)
+      if (pendingTouchRef.current) { clearTimeout(pendingTouchRef.current.timer); pendingTouchRef.current = null; }
+      if (touchDragRef.current) cancelTouchDrag();
     };
   }, []);
 
@@ -3414,11 +3421,10 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     seedAddOnCounters(menu);
     setConfirmDelMenu(false);
     setEditing(item.id);
-    // แปลงข้อมูลเก่า (list ราบ) ให้เป็น "กลุ่ม" แล้วเรียงตัวเลือกในแต่ละกลุ่มตามราคาน้อยไปมาก
-    const groups = normalizeAddOnGroups(item.addOns).map((g) => ({
-      ...g,
-      options: [...(g.options || [])].sort((a, b) => a.price - b.price),
-    }));
+    // แปลงข้อมูลเก่า (list ราบ) ให้เป็น "กลุ่ม" — คงลำดับเดิมของกลุ่ม/ตัวเลือกไว้ตามที่บันทึกไว้ล่าสุด
+    // (ไม่บังคับเรียงตามราคาอีกต่อไป เพราะพนักงานจัดลำดับเองได้แล้วด้วยปุ่มขึ้น/ลง — ถ้ายัง sort ที่นี่
+    // จะทับลำดับที่ตั้งใจจัดไว้ทุกครั้งที่เปิดฟอร์มแก้ไข)
+    const groups = normalizeAddOnGroups(item.addOns);
     setForm({
       name: item.name,
       desc: item.desc,
@@ -3475,6 +3481,36 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     setForm((f) => ({ ...f, addOns: f.addOns.map((g) => (g.id === gid ? { ...g, ...patch } : g)) }));
   };
 
+  // สลับตำแหน่งกลุ่มตัวเลือกเพิ่มขึ้น/ลง — ลำดับนี้คือลำดับที่ลูกค้าเห็นตอนเลือกท็อปปิ้งจริง
+  const moveGroup = (gid, dir) => {
+    setForm((f) => {
+      const list = f.addOns;
+      const idx = list.findIndex((g) => g.id === gid);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= list.length) return f;
+      const next = [...list];
+      [next[idx], next[j]] = [next[j], next[idx]];
+      return { ...f, addOns: next };
+    });
+  };
+
+  // สลับตำแหน่งตัวเลือกย่อยขึ้น/ลงภายในกลุ่มเดียวกัน (ข้ามกลุ่มไม่ได้)
+  const moveOption = (gid, oid, dir) => {
+    setForm((f) => ({
+      ...f,
+      addOns: f.addOns.map((g) => {
+        if (g.id !== gid) return g;
+        const list = g.options || [];
+        const idx = list.findIndex((o) => o.id === oid);
+        const j = idx + dir;
+        if (idx < 0 || j < 0 || j >= list.length) return g;
+        const next = [...list];
+        [next[idx], next[j]] = [next[j], next[idx]];
+        return { ...g, options: next };
+      }),
+    }));
+  };
+
   const removeGroup = (gid) => {
     setForm((f) => ({ ...f, addOns: f.addOns.filter((g) => g.id !== gid) }));
     setConfirmDelGroup(null);
@@ -3484,12 +3520,12 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
     const name = (newOptionName[gid] || "").trim();
     const price = Number(newOptionPrice[gid]);
     if (!name || !newOptionPrice[gid] || Number.isNaN(price)) return;
-    // เรียงตัวเลือกในกลุ่มตามราคาน้อยไปมาก — ตัวที่ +0 บาทจะขึ้นบนสุดเสมอ
+    // ตัวเลือกใหม่ต่อท้ายกลุ่มตามลำดับที่เพิ่ม — พนักงานจัดลำดับเองได้ภายหลังด้วยปุ่มขึ้น/ลง (ไม่ auto-sort ตามราคาอีกต่อไป)
     setForm((f) => ({
       ...f,
       addOns: f.addOns.map((g) =>
         g.id === gid
-          ? { ...g, options: [...(g.options || []), { id: nextAddOnId(), name, price, cost: newOptionCost[gid] || "", recipe: {} }].sort((a, b) => a.price - b.price) }
+          ? { ...g, options: [...(g.options || []), { id: nextAddOnId(), name, price, cost: newOptionCost[gid] || "", recipe: {} }] }
           : g
       ),
     }));
@@ -4091,7 +4127,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                 <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ราคา (บาท)</label>
                 <input
                   value={form.price}
-                  onChange={(e) => setForm((f) => ({ ...f, price: e.target.value.replace(/[^0-9]/g, "") }))}
+                  onChange={(e) => setForm((f) => ({ ...f, price: digitsOnly(e.target.value) }))}
                   placeholder="0"
                   inputMode="numeric"
                   style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -4102,7 +4138,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                 <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">ต้นทุน/หน่วย (บาท)</label>
                 <input
                   value={form.cost}
-                  onChange={(e) => setForm((f) => ({ ...f, cost: e.target.value.replace(/[^0-9.]/g, "") }))}
+                  onChange={(e) => setForm((f) => ({ ...f, cost: decimalDigitsOnly(e.target.value) }))}
                   placeholder="เช่น 18 (เว้นว่าง = ยังไม่ตั้งต้นทุน)"
                   inputMode="decimal"
                   style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -4152,7 +4188,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                         </select>
                         <input
                           value={qty}
-                          onChange={(e) => setForm((f) => ({ ...f, recipe: { ...f.recipe, [sid]: e.target.value.replace(/[^0-9.]/g, "") } }))}
+                          onChange={(e) => setForm((f) => ({ ...f, recipe: { ...f.recipe, [sid]: decimalDigitsOnly(e.target.value) } }))}
                           placeholder="จำนวน"
                           inputMode="decimal"
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -4204,14 +4240,36 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                   </p>
                 )}
                 <div className="space-y-2.5 mb-2">
-                  {form.addOns.map((g) => (
+                  {form.addOns.map((g, gIdx) => (
                     <div
                       key={g.id}
                       style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }}
                       className="rounded-xl p-3 space-y-2.5"
                     >
-                      {/* หัวกลุ่ม: ชื่อ + ปุ่มบังคับเลือก + ลบกลุ่ม */}
+                      {/* หัวกลุ่ม: ปุ่มสลับลำดับกลุ่ม + ชื่อ + ปุ่มบังคับเลือก + ลบกลุ่ม */}
                       <div className="flex items-center gap-2">
+                        <div className="flex flex-col flex-shrink-0 -my-1">
+                          <button
+                            type="button"
+                            onClick={() => moveGroup(g.id, -1)}
+                            disabled={gIdx === 0}
+                            style={{ color: gIdx === 0 ? COLORS.line : COLORS.inkSoft }}
+                            className="leading-none py-0.5"
+                            title="ย้ายกลุ่มนี้ขึ้น"
+                          >
+                            <ChevronUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveGroup(g.id, 1)}
+                            disabled={gIdx === form.addOns.length - 1}
+                            style={{ color: gIdx === form.addOns.length - 1 ? COLORS.line : COLORS.inkSoft }}
+                            className="leading-none py-0.5"
+                            title="ย้ายกลุ่มนี้ลง"
+                          >
+                            <ChevronDown size={14} />
+                          </button>
+                        </div>
                         <input
                           value={g.name}
                           onChange={(e) => updateGroup(g.id, { name: e.target.value })}
@@ -4266,16 +4324,38 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                           {confirmDelGroup === g.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
                         </button>
                       </div>
-                      {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ */}
+                      {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ + สลับลำดับได้ */}
                       {g.options && g.options.length > 0 ? (
                         <div className="space-y-1.5">
-                          {g.options.map((o) => (
+                          {g.options.map((o, oIdx) => (
                             <div
                               key={o.id}
                               style={{ background: COLORS.paper }}
                               className="rounded-lg px-3 py-2"
                             >
                               <div className="flex items-center gap-2">
+                                <div className="flex flex-col flex-shrink-0 -my-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => moveOption(g.id, o.id, -1)}
+                                    disabled={oIdx === 0}
+                                    style={{ color: oIdx === 0 ? COLORS.line : COLORS.inkSoft }}
+                                    className="leading-none py-0.5"
+                                    title="ย้ายตัวเลือกนี้ขึ้น"
+                                  >
+                                    <ChevronUp size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => moveOption(g.id, o.id, 1)}
+                                    disabled={oIdx === g.options.length - 1}
+                                    style={{ color: oIdx === g.options.length - 1 ? COLORS.line : COLORS.inkSoft }}
+                                    className="leading-none py-0.5"
+                                    title="ย้ายตัวเลือกนี้ลง"
+                                  >
+                                    <ChevronDown size={12} />
+                                  </button>
+                                </div>
                                 <input
                                   value={o.name}
                                   onChange={(e) => updateOption(g.id, o.id, { name: e.target.value })}
@@ -4285,7 +4365,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                 <span style={{ color: COLORS.caramelDark }} className="text-[11px] font-bold flex-shrink-0">+฿</span>
                                 <input
                                   value={o.price}
-                                  onChange={(e) => updateOption(g.id, o.id, { price: e.target.value.replace(/[^0-9]/g, "") })}
+                                  onChange={(e) => updateOption(g.id, o.id, { price: digitsOnly(e.target.value) })}
                                   inputMode="numeric"
                                   style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                                   className="w-14 rounded-lg px-2 py-1.5 text-sm bg-white outline-none text-center"
@@ -4316,7 +4396,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                 <span style={{ color: COLORS.inkSoft }} className="text-[10px] flex-shrink-0">ต้นทุน</span>
                                 <input
                                   value={o.cost != null ? String(o.cost) : ""}
-                                  onChange={(e) => updateOption(g.id, o.id, { cost: e.target.value.replace(/[^0-9.]/g, "") })}
+                                  onChange={(e) => updateOption(g.id, o.id, { cost: decimalDigitsOnly(e.target.value) })}
                                   placeholder="฿"
                                   inputMode="decimal"
                                   style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -4351,7 +4431,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                     <input
                                       value={qty}
                                       onChange={(e) =>
-                                        updateOption(g.id, o.id, { recipe: { ...(o.recipe || {}), [sid]: e.target.value.replace(/[^0-9.]/g, "") } })
+                                        updateOption(g.id, o.id, { recipe: { ...(o.recipe || {}), [sid]: decimalDigitsOnly(e.target.value) } })
                                       }
                                       placeholder="จำนวน"
                                       inputMode="decimal"
@@ -4406,7 +4486,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                         />
                         <input
                           value={newOptionPrice[g.id] || ""}
-                          onChange={(e) => setNewOptionPrice((m) => ({ ...m, [g.id]: e.target.value.replace(/[^0-9]/g, "") }))}
+                          onChange={(e) => setNewOptionPrice((m) => ({ ...m, [g.id]: digitsOnly(e.target.value) }))}
                           placeholder="+฿"
                           inputMode="numeric"
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -4414,7 +4494,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                         />
                         <input
                           value={newOptionCost[g.id] || ""}
-                          onChange={(e) => setNewOptionCost((m) => ({ ...m, [g.id]: e.target.value.replace(/[^0-9.]/g, "") }))}
+                          onChange={(e) => setNewOptionCost((m) => ({ ...m, [g.id]: decimalDigitsOnly(e.target.value) }))}
                           placeholder="ต้นทุน฿"
                           inputMode="decimal"
                           style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -7284,7 +7364,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
                   <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">จำนวนคงเหลือ</label>
                   <input
                     value={form.qty}
-                    onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value.replace(/[^0-9.]/g, "") }))}
+                    onChange={(e) => setForm((f) => ({ ...f, qty: decimalDigitsOnly(e.target.value) }))}
                     placeholder="0"
                     inputMode="decimal"
                     style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -7295,7 +7375,7 @@ function StaffStockView({ stockItems, updateStock, menu }) {
                   <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mb-1">แจ้งเตือนเมื่อ ≤</label>
                   <input
                     value={form.minQty}
-                    onChange={(e) => setForm((f) => ({ ...f, minQty: e.target.value.replace(/[^0-9.]/g, "") }))}
+                    onChange={(e) => setForm((f) => ({ ...f, minQty: decimalDigitsOnly(e.target.value) }))}
                     placeholder="เช่น 10 (เว้นว่าง = ไม่เตือน)"
                     inputMode="decimal"
                     style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
@@ -8840,9 +8920,21 @@ function App() {
     });
     const ids = Object.keys(needs);
     if (ids.length === 0) return;
-    updateStock((prev) =>
-      prev.map((s) => (ids.includes(s.id) ? { ...s, qty: Math.max(0, (Number(s.qty) || 0) - needs[s.id]) } : s))
-    );
+    if (!FIREBASE_SYNC_ENABLED) {
+      // โหมดออฟไลน์ — ไม่มีเครื่องอื่นมาแย่งเขียนพร้อมกันอยู่แล้ว อัปเดต local state ตรงๆ ได้ปลอดภัย
+      setStockItems((prev) => prev.map((s) => (ids.includes(s.id) ? { ...s, qty: Math.max(0, (Number(s.qty) || 0) - needs[s.id]) } : s)));
+      return;
+    }
+    // ใช้ transaction แทนการอ่าน state ในเครื่อง (prev) แล้ว .set() ทับทั้งก้อน — ถ้าพนักงาน 2 เครื่องกด
+    // "เสร็จแล้ว" ของคนละออร์เดอร์เกือบพร้อมกัน วิธีเดิมจะเขียนทับกันเอง ทำให้การหักสต็อกของอีกฝั่งหายไปเงียบๆ
+    // (สต็อกจะโชว์เหลือมากกว่าความจริง) transaction จะอ่านค่าล่าสุดจากเซิร์ฟเวอร์ก่อนคำนวณเสมอทุกครั้ง
+    const docRef = db.collection("config").doc("stock");
+    db.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      const items = (snap.exists && Array.isArray(snap.data().items)) ? snap.data().items : [];
+      const nextItems = items.map((s) => (ids.includes(s.id) ? { ...s, qty: Math.max(0, (Number(s.qty) || 0) - needs[s.id]) } : s));
+      tx.set(docRef, { items: nextItems });
+    }).catch((err) => console.error("หักสต็อกขึ้น Firestore ไม่สำเร็จ:", err));
   };
 
   // รายชื่อเครื่องพนักงานที่ได้รับสิทธิ์ (staffUids) — ซิงก์แบบเรียลไทม์:
