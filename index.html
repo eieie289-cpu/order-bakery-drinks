@@ -205,6 +205,18 @@ let idCounter = 100;
 const nextId = () => `m${idCounter++}`;
 let addOnIdCounter = 100;
 const nextAddOnId = () => `ao${addOnIdCounter++}`;
+// แปลงเลขไทย (๐-๙) เป็นเลขอารบิกก่อนกรองตัวเลข — กันมือถือที่ตั้งคีย์บอร์ดเป็นเลขไทยพิมพ์ในช่องตัวเลขแล้วโดนกรองทิ้งหมด
+const toArabicDigits = (s) => String(s || "").replace(/[๐-๙]/g, (d) => "๐๑๒๓๔๕๖๗๘๙".indexOf(d));
+// ใช้แทน .replace(/[^0-9]/g, "") ตรงๆ ในช่องตัวเลขของฟอร์มตัวต่อโปรโมชั่น — รองรับทั้งเลขอารบิกและเลขไทย
+const digitsOnly = (s) => toArabicDigits(s).replace(/[^0-9]/g, "");
+// โชว์ราคา/ยอดเงินให้อ่านง่าย — ถ้ามีเศษสตางค์ (เช่นจากส่วนลด %) บังคับ 2 ตำแหน่งทศนิยมเสมอ (40.50 ไม่ใช่ 40.5)
+// แต่ถ้าเป็นจำนวนเต็มพอดี (ราคาปกติส่วนใหญ่) โชว์แบบจำนวนเต็มตามเดิม ไม่ใส่ .00 ให้รกจอ
+// ใส่ , คั่นหลักพันให้เผื่อกรณีตัวเลขใหญ่ (ยอดขายรวม ฯลฯ)
+const fmtBaht = (n) => {
+  const num = Number(n) || 0;
+  const rounded = Math.round(num * 100) / 100;
+  return Number.isInteger(rounded) ? rounded.toLocaleString("th-TH") : rounded.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 let addOnGroupIdCounter = 100;
 const nextAddOnGroupId = () => `g${addOnGroupIdCounter++}`;
 let stockIdCounter = 100;
@@ -562,9 +574,13 @@ const ruleDayMatches = (r, now) => {
   return !r.days || r.days.length === 0 || r.days.includes(d.getDay());
 };
 // เงื่อนไขที่เช็คได้เฉพาะเมื่อมีตะกร้า/วิธีรับ/โค้ด/แก้ว — ใช้ในหน้าชำระเงิน
-const ruleCartConditionsMet = (r, ctx) => {
+const ruleCartConditionsMet = (r, ctx, promo) => {
   const conds = r.conds || [];
-  if (conds.includes("code") && String((ctx && ctx.code) || "").trim().toUpperCase() !== String(r.code || "").trim().toUpperCase()) return false;
+  // โค้ดของโปรตัวต่อ ต้องกดปุ่ม "ใช้โค้ด" แล้วผ่านการตรวจ (พิมพ์ตรง + ยังไม่ครบโควตา/ยังไม่เคยใช้) มาก่อน
+  // เหมือนกับโค้ดโปรแบบเก่าทุกประการ — ผูกกับ appliedPromoId ที่ส่งมาจาก applyPromoCode() เท่านั้น
+  // (ไม่ใช้วิธีจับคู่ข้อความสดจาก ctx.code ตรงๆ อีกต่อไป กันหักส่วนลดอัตโนมัติตอนพิมพ์ก่อนกดยืนยัน
+  // และกันข้อความแจ้งเตือน/ป้ายยืนยันไม่ตรงกับโปรที่ใช้จริง)
+  if (conds.includes("code") && (ctx && ctx.appliedPromoId) !== (promo && promo.id)) return false;
   if (conds.includes("pickup") && (ctx && ctx.deliveryMethod) !== "pickup") return false;
   if (conds.includes("byoc")) {
     if (!(ctx && ctx.bringCup)) return false;
@@ -590,7 +606,9 @@ const ruleIsUnitLevel = (r) => {
   const simpleConds = !(r.conds || []).some((c) => ["code", "pickup", "byoc", "minSpend", "minQty", "contains"].includes(c));
   if (!simpleConds) return false;
   if ((r.target === "all" || r.target === "items") && (r.action === "percent" || r.action === "baht")) return true;
-  if (r.target === "addons" && r.action === "free") return true;
+  // ท็อปปิ้งฟรีที่มี "จำกัดสูงสุด" ต้องนับรวมทั้งออร์เดอร์ — ตอนเพิ่มลงตะกร้าทีละชิ้นยังไม่รู้ว่าออร์เดอร์
+  // สุดท้ายจะมีกี่ชิ้น เลยต้องส่งไปคำนวณที่ตะกร้ารวม (cart-level) แทน ไม่งั้น limitMax จะไม่มีผลเลย
+  if (r.target === "addons" && r.action === "free" && !(Number(r.limitMax) > 0)) return true;
   return false;
 };
 // ส่วนลดหน่วยของโปรตัวต่อ (หน้าเมนู + ตอนเพิ่มลงตะกร้า) — ใช้สูงสุดของทุกโปรที่ตรง
@@ -629,12 +647,13 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
   let totalBaht = 0;
   const labels = [];
   let promoId = "";
+  let promoPerCustomer = false;
   (promos || []).forEach((p) => {
     if (!p || !p.active || !p.rules) return;
     const r = p.rules;
     if (!ruleTimeMatches(r, now) || !ruleDayMatches(r, now)) return;
     if (ruleIsUnitLevel(r)) return; // หักไปแล้วตอนเพิ่มลงตะกร้า — กันหักซ้ำ
-    if (!ruleCartConditionsMet(r, ctx)) return;
+    if (!ruleCartConditionsMet(r, ctx, p)) return;
     let baht = 0;
     let label = "";
     if (r.target === "cart") {
@@ -649,6 +668,10 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
       } else if (r.action === "percent") {
         baht = Math.round(subtotal * (Number(r.actionAmount) || 0)) / 100;
         label = `ลด ${ruleAmtText(Number(r.actionAmount) || 0, true)}`;
+      } else if (r.action === "combo") {
+        // action=combo ไม่รองรับ target=cart (ราคาชุดคำนวณจากเมนูในชุดเท่านั้น ไม่ใช่ยอดรวมทั้งบิล)
+        // กันไว้เผื่อมีข้อมูลเก่าก่อนแก้ฟอร์ม — ไม่ให้หักผิดเป็นส่วนลดยอดรวมทั้งบิล
+        baht = 0;
       } else {
         baht = Number(r.actionAmount) || 0;
         label = `ลด ${ruleAmtText(baht, false)}`;
@@ -684,12 +707,15 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
           cnt = freeUnits;
         } else {
           // แบบเดิม — นับแยกทีละเมนู ต้องซื้อเมนูเดียวกันครบ X ชิ้นถึงจะได้ฟรีของเมนูนั้น
-          targets.forEach((c) => {
-            const unit = c.price;
-            let freeUnits = Math.floor((Number(c.qty) || 0) / X);
-            if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
+          // จำกัดสูงสุด (limitMax) นับรวมข้ามเมนูเป็นก้อนเดียวทั้งออร์เดอร์ (ไม่ใช่แยกทีละเมนู)
+          // เรียงเมนูราคาถูกไปแพงก่อน กันร้านขาดทุนเกินจำเป็นเวลาโดนตัดโควตา (แบบเดียวกับโหมดคละเมนู)
+          const perMenuFree = [...targets]
+            .sort((a, b) => a.price - b.price)
+            .map((c) => ({ c, freeUnits: Math.floor((Number(c.qty) || 0) / X) }));
+          perMenuFree.forEach(({ c, freeUnits }) => {
+            if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Math.max(0, Number(r.limitMax) - cnt));
             if (freeUnits > 0) {
-              baht += Math.round(freeUnits * unit * 100) / 100;
+              baht += Math.round(freeUnits * c.price * 100) / 100;
               cnt += freeUnits;
             }
           });
@@ -708,11 +734,13 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
         });
         label = `ชิ้นที่ ${N} ลด${ruleAmtText(Number(r.actionAmount) || 0, r.actionUnit === "percent")}`;
       } else if (r.action === "free") {
+        // จำกัดสูงสุด (limitMax) นับรวมข้ามเมนูเป็นก้อนเดียวทั้งออร์เดอร์ (ไม่ใช่แยกทีละเมนู)
+        // เรียงเมนูราคาถูกไปแพงก่อน กันร้านขาดทุนเกินจำเป็นเวลาโดนตัดโควตา
         let cnt = 0;
-        targets.forEach((c) => {
+        [...targets].sort((a, b) => a.price - b.price).forEach((c) => {
           const unit = c.price;
           let freeUnits = 1;
-          if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Number(r.limitMax));
+          if (Number(r.limitMax) > 0) freeUnits = Math.min(freeUnits, Math.max(0, Number(r.limitMax) - cnt));
           if (freeUnits > 0) {
             baht += Math.round(freeUnits * unit * 100) / 100;
             cnt += freeUnits;
@@ -742,8 +770,8 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
       }
       baht = Math.min(baht, subtotal);
     } else if (r.target === "addons") {
-      // ท็อปปิ้งฟรีแบบมีเงื่อนไขตะกร้า (เช่น ซื้อครบแล้วไข่มุกฟรี) — คืนเงินราคา add-on ที่ควรฟรี
-      // (แบบไม่มีเงื่อนไขถูกหักเป็นราคาหน่วยตอนเพิ่มลงตะกร้าแล้ว — ruleIsUnitLevel ข้ามไว้ข้างบน)
+      // ท็อปปิ้งฟรีแบบมีเงื่อนไขตะกร้า (เช่น ซื้อครบแล้วไข่มุกฟรี) หรือมี "จำกัดสูงสุด" ที่ต้องนับรวมทั้งออร์เดอร์
+      // — คืนเงินราคา add-on ที่ควรฟรี (แบบไม่มีเงื่อนไข+ไม่จำกัดถูกหักเป็นราคาหน่วยตอนเพิ่มลงตะกร้าแล้ว — ruleIsUnitLevel ข้ามไว้ข้างบน)
       const freeOptIds = r.addonIds || [];
       let freeCnt = 0;
       cart.forEach((c) => {
@@ -763,9 +791,12 @@ const computeRuleCartDiscount = (cart, promos, ctx) => {
       if (label) labels.push(label);
     }
     // จด id ของโปรที่ใช้โค้ด (เพื่อนับการใช้ตอนสั่งสำเร็จ) — เฉพาะตัวที่เงื่อนไขโค้ดผ่าน
-    if ((r.conds || []).includes("code") && !promoId) promoId = p.id;
+    if ((r.conds || []).includes("code") && !promoId) {
+      promoId = p.id;
+      promoPerCustomer = !!p.perCustomer;
+    }
   });
-  return { baht: Math.round(totalBaht * 100) / 100, label: labels.join(" + "), promoId };
+  return { baht: Math.round(totalBaht * 100) / 100, label: labels.join(" + "), promoId, perCustomer: promoPerCustomer };
 };
 
 // ข้อความโค้ดของโปรโมชั่น (รองรับทั้งโปรเก่า type:"code" และโปรตัวต่อที่เงื่อนไขมี code)
@@ -776,6 +807,11 @@ const promoDiscountPercent = (p) =>
   p && p.rules
     ? p.rules.action === "percent" ? Number(p.rules.actionAmount) || 0 : 0
     : Number(p && p.discountPercent) || 0;
+// ฿ ของโปรโมชั่น (รองรับทั้งโปรเก่าและโปรตัวต่อ — โปรตัวต่อแบบ % คืน 0)
+const promoDiscountBaht = (p) =>
+  p && p.rules
+    ? p.rules.action === "baht" ? Number(p.rules.actionAmount) || 0 : 0
+    : Number(p && p.discountBaht) || 0;
 // หาโค้ดส่วนลดที่เปิดใช้และตรงกับที่กรอก (ไม่สนตัวพิมพ์เล็ก-ใหญ่) — ทั้งโปรเก่าและโปรตัวต่อ
 const findPromoCode = (code, promos) => {
   const c = String(code || "").trim().toUpperCase();
@@ -787,7 +823,7 @@ const findPromoCode = (code, promos) => {
 const calcOrderTotal = (order) => {
   const subtotal = ((order && order.items) || []).reduce((s, i) => s + i.price * i.qty, 0);
   const discount = (order && order.discount && Number(order.discount.baht)) || 0;
-  return Math.max(0, subtotal - discount);
+  return Math.round(Math.max(0, subtotal - discount) * 100) / 100;
 };
 
 // ---- สถานะการจ่ายเงินของออร์เดอร์ ----
@@ -954,7 +990,7 @@ function PaymentStatusBadge({ order, onMarkPaid, onUnmarkPaid }) {
         style={{ background: "#F3D9D3", color: "#C0533F" }}
         className="text-xs font-semibold px-2.5 py-1 rounded-full inline-flex items-center gap-1 whitespace-nowrap"
       >
-        <Banknote size={11} /> ยังไม่จ่าย · เก็บ ฿{total}
+        <Banknote size={11} /> ยังไม่จ่าย · เก็บ ฿{fmtBaht(total)}
       </span>
       {onMarkPaid && (
         <button
@@ -1552,9 +1588,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 <div className="flex items-center justify-between mt-2.5">
                   <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">
                     {hasDiscount && (
-                      <span style={{ color: COLORS.inkSoft }} className="line-through font-normal text-xs mr-1">฿{item.price}</span>
+                      <span style={{ color: COLORS.inkSoft }} className="line-through font-normal text-xs mr-1">฿{fmtBaht(item.price)}</span>
                     )}
-                    ฿{discountedPrice}
+                    ฿{fmtBaht(discountedPrice)}
                     {hasDiscount && (
                       <span style={{ background: "#F3D9D3", color: "#C0533F" }} className="text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 align-middle">
                         {discountLabelFor(item, promos, nowTs)}
@@ -1640,7 +1676,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 />
               )}
               <p style={{ color: COLORS.inkSoft }} className="text-sm leading-relaxed mb-2">{detailFor.desc}</p>
-              <p style={{ color: COLORS.caramelDark }} className="font-bold text-lg mb-4">฿{effectiveItemPrice(detailFor, promos, nowTs)}</p>
+              <p style={{ color: COLORS.caramelDark }} className="font-bold text-lg mb-4">฿{fmtBaht(effectiveItemPrice(detailFor, promos, nowTs))}</p>
               {dInCart ? (
                 <div className="flex items-center justify-between">
                   <span style={{ color: COLORS.inkSoft }} className="text-sm">จำนวนในตะกร้า</span>
@@ -1652,7 +1688,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                 </div>
               ) : (
                 <PrimaryButton full onClick={() => addToCart(detailFor)}>
-                  เพิ่มลงตะกร้า ฿{effectiveItemPrice(detailFor, promos, nowTs)}
+                  เพิ่มลงตะกร้า ฿{fmtBaht(effectiveItemPrice(detailFor, promos, nowTs))}
                 </PrimaryButton>
               )}
             </div>
@@ -1804,7 +1840,7 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
             </div>
             <span className="text-sm font-medium">ดูตะกร้า</span>
           </div>
-          <span className="text-white font-bold">฿{displayTotal}</span>
+          <span className="text-white font-bold">฿{fmtBaht(displayTotal)}</span>
         </button>
       )}
 
@@ -1833,9 +1869,9 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
                       )}
                       <p style={{ color: COLORS.inkSoft }} className="text-xs">
                         {item.basePrice > item.price && (
-                          <span className="line-through mr-1">฿{item.basePrice}</span>
+                          <span className="line-through mr-1">฿{fmtBaht(item.basePrice)}</span>
                         )}
-                        ฿{item.price} × {item.qty}
+                        ฿{fmtBaht(item.price)} × {item.qty}
                       </p>
                     </div>
                     <div style={{ background: COLORS.peachSoft }} className="flex items-center gap-3 rounded-full px-1">
@@ -1899,17 +1935,17 @@ function CustomerView({ menu, cart, setCart, onCheckout, shopOpen, menuLoaded, p
               {thresholdPromo &&
                 (thresholdMet ? (
                   <div className="flex items-center justify-between text-xs mb-1.5">
-                    <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลด ซื้อครบ ฿{thresholdPromo.minSpend}</span>
-                    <span style={{ color: COLORS.sage }} className="font-semibold">-฿{thresholdBaht}</span>
+                    <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลด ซื้อครบ ฿{fmtBaht(thresholdPromo.minSpend)}</span>
+                    <span style={{ color: COLORS.sage }} className="font-semibold">-฿{fmtBaht(thresholdBaht)}</span>
                   </div>
                 ) : (
                   <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-semibold mb-1.5">
-                    ซื้อเพิ่มอีก ฿{Math.max(0, (Number(thresholdPromo.minSpend) || 0) - total)} รับส่วนลด ฿{Number(thresholdPromo.discountBaht) || 0}
+                    ซื้อเพิ่มอีก ฿{fmtBaht(Math.max(0, (Number(thresholdPromo.minSpend) || 0) - total))} รับส่วนลด ฿{fmtBaht(thresholdPromo.discountBaht)}
                   </p>
                 ))}
               <div className="flex items-center justify-between mb-3">
                 <span style={{ color: COLORS.inkSoft }} className="text-sm">ยอดรวม</span>
-                <span style={{ color: COLORS.ink }} className="text-lg font-bold">฿{displayTotal}</span>
+                <span style={{ color: COLORS.ink }} className="text-lg font-bold">฿{fmtBaht(displayTotal)}</span>
               </div>
               <PrimaryButton
                 full
@@ -2005,13 +2041,17 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   const ruleCartDiscount = computeRuleCartDiscount(cart, promos, {
     deliveryMethod,
     bringCup,
-    code: promoCode,
+    appliedPromoId: appliedPromo ? appliedPromo.id : "",
     subtotal,
     cart,
     now: nowTs,
+    uid,
   });
-  const discountBaht = codeBaht + byocBaht + thresholdBaht + ruleCartDiscount.baht;
-  const total = Math.max(0, subtotal - discountBaht);
+  // รวมส่วนลดจากหลายแหล่ง (โค้ด/แก้วมาเอง/ซื้อครบ/โปรตัวต่ออื่นๆ) — แต่ละก้อนถูกปัดเป็นสตางค์มาแล้ว
+  // แต่การบวกเลขทศนิยมใน JS อาจเกิดเศษ float คลาดเคลื่อนได้ (เช่น 0.01+0.09 = 0.09999999999999999)
+  // ปัดซ้ำอีกรอบตรงนี้กันราคาสุดท้ายที่ลูกค้า/พนักงานเห็นมีเศษยิบย่อยที่ไม่ควรมี
+  const discountBaht = Math.round((codeBaht + byocBaht + thresholdBaht + ruleCartDiscount.baht) * 100) / 100;
+  const total = Math.round(Math.max(0, subtotal - discountBaht) * 100) / 100;
   // ป้ายสรุปส่วนลด เช่น "ซื้อครบ + นำแก้วมาเอง + โค้ด SAVE5 + 1แถม1 (ฟรี 1 ชิ้น)"
   const discountSummaryLabel = [
     thresholdBaht > 0 ? "ซื้อครบ" : null,
@@ -2052,13 +2092,17 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
   // ข้อมูลส่วนลดที่จะแนบไปกับออร์เดอร์ (ส่งให้พนักงานเห็นยอดที่หักจริง)
   const getDiscount = () => {
     if (discountBaht <= 0) return null;
+    const finalPromoId = appliedPromo ? appliedPromo.id : ruleCartDiscount.promoId || "";
+    // maxUses ของโปรที่ใช้จริง — ส่งไปให้ placeOrder เช็คซ้ำแบบ transaction ตอนเขียนจริง (กันสองเครื่องแย่งโควตาสุดท้ายพร้อมกัน)
+    const finalPromo = finalPromoId ? (promos || []).find((p) => p.id === finalPromoId) : null;
     return {
       code: promoCodeText(appliedPromo),
       percent: promoDiscountPercent(appliedPromo),
       baht: discountBaht,
       label: discountSummaryLabel,
-      promoId: appliedPromo ? appliedPromo.id : ruleCartDiscount.promoId || "", // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
-      perCustomer: appliedPromo ? !!appliedPromo.perCustomer : false, // โค้ดแบบ 1 ครั้ง/คน — ใช้อัปเดต usedBy ตอนสั่งสำเร็จ
+      promoId: finalPromoId, // ใช้ใน placeOrder เพื่อนับจำนวนการใช้โค้ด
+      perCustomer: appliedPromo ? !!appliedPromo.perCustomer : !!ruleCartDiscount.perCustomer, // โค้ดแบบ 1 ครั้ง/คน — ใช้อัปเดต usedBy ตอนสั่งสำเร็จ
+      maxUses: finalPromo ? Number(finalPromo.maxUses) || 0 : 0,
     };
   };
 
@@ -2155,7 +2199,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           <div key={item.cartId} className="py-1.5">
             <div className="flex justify-between gap-2">
               <span style={{ color: COLORS.ink, fontSize: 16 }} className="flex-1 min-w-0 break-words font-semibold">{item.name} × {item.qty}</span>
-              <span style={{ color: COLORS.ink, fontSize: 16 }} className="font-semibold flex-shrink-0">฿{item.price * item.qty}</span>
+              <span style={{ color: COLORS.ink, fontSize: 16 }} className="font-semibold flex-shrink-0">฿{fmtBaht(item.price * item.qty)}</span>
             </div>
             {item.addOns && item.addOns.length > 0 && (
               <p style={{ color: COLORS.caramelDark, fontSize: 12 }} className="mt-0.5">
@@ -2187,7 +2231,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
                 </span>
                 <span style={{ color: COLORS.ink }} className="text-sm font-medium min-w-0 break-words">{byocPromo.name || "นำแก้วมาเอง"}</span>
               </span>
-              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{byocBahtValue}</span>
+              <span style={{ color: COLORS.sage }} className="text-xs font-bold">ลด ฿{fmtBaht(byocBahtValue)}</span>
             </button>
           )}
           {byocPromo && byocPickupOnly && deliveryMethod === "delivery" && (
@@ -2230,24 +2274,27 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           )}
           {appliedPromo && (
             <p style={{ color: COLORS.sage }} className="text-[11px] font-semibold mb-1">
-              โค้ด {appliedPromo.code} · ลด{" "}
-              {Number(appliedPromo.discountBaht) > 0 ? `฿${appliedPromo.discountBaht}` : `${Number(appliedPromo.discountPercent) || 0}%`} จากยอดรวม
+              {appliedPromo.rules
+                ? `โค้ด ${promoCodeText(appliedPromo)}${ruleCartDiscount.label ? ` · ${ruleCartDiscount.label}` : ""}`
+                : <>โค้ด {appliedPromo.code} · ลด{" "}
+                    {Number(appliedPromo.discountBaht) > 0 ? `฿${appliedPromo.discountBaht}` : `${Number(appliedPromo.discountPercent) || 0}%`} จากยอดรวม
+                  </>}
             </p>
           )}
           {discountBaht > 0 && (
             <div className="flex justify-between text-xs mb-1">
               <span style={{ color: COLORS.sage }} className="font-semibold">ส่วนลด {discountSummaryLabel}</span>
-              <span style={{ color: COLORS.sage }} className="font-semibold">-฿{discountBaht}</span>
+              <span style={{ color: COLORS.sage }} className="font-semibold">-฿{fmtBaht(discountBaht)}</span>
             </div>
           )}
           {thresholdPromo && !thresholdMet && (
             <p style={{ color: COLORS.caramelDark }} className="text-[11px] font-semibold mb-1">
-              ซื้อเพิ่มอีก ฿{Math.max(0, (Number(thresholdPromo.minSpend) || 0) - subtotal)} รับส่วนลด ฿{Number(thresholdPromo.discountBaht) || 0}
+              ซื้อเพิ่มอีก ฿{fmtBaht(Math.max(0, (Number(thresholdPromo.minSpend) || 0) - subtotal))} รับส่วนลด ฿{fmtBaht(thresholdPromo.discountBaht)}
             </p>
           )}
           <div className="flex justify-between pt-2">
             <span style={{ color: COLORS.ink }} className="font-semibold">ยอดรวมทั้งหมด</span>
-            <span style={{ color: COLORS.caramelDark }} className="font-bold text-lg">฿{total}</span>
+            <span style={{ color: COLORS.caramelDark }} className="font-bold text-lg">฿{fmtBaht(total)}</span>
           </div>
         </div>
       </div>
@@ -2468,7 +2515,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
       {isCash ? (
         <div style={{ background: COLORS.sageSoft, border: `1px dashed ${COLORS.sage}` }} className="rounded-xl px-4 py-3 mb-6 text-xs">
           <span style={{ color: COLORS.ink }}>
-            เตรียมเงินสด ฿{total} ไว้จ่ายตอนพนักงานไปส่งของที่บ้านได้เลย ไม่ต้องจ่ายผ่านแอปตอนนี้
+            เตรียมเงินสด ฿{fmtBaht(total)} ไว้จ่ายตอนพนักงานไปส่งของที่บ้านได้เลย ไม่ต้องจ่ายผ่านแอปตอนนี้
           </span>
         </div>
       ) : (
@@ -2496,7 +2543,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           {collectOnDelivery && (
             <p style={{ background: COLORS.peachSoft, border: `1px dashed ${COLORS.caramel}` }} className="rounded-xl px-4 py-3 mb-3 text-xs">
               <span style={{ color: COLORS.caramelDark }} className="font-semibold flex items-center gap-1.5">
-                <Banknote size={14} /> เก็บปลายทาง — เตรียมเงินสด ฿{total} ไว้จ่ายตอนรับของ พนักงานจะเก็บเงินให้ตอนส่ง
+                <Banknote size={14} /> เก็บปลายทาง — เตรียมเงินสด ฿{fmtBaht(total)} ไว้จ่ายตอนรับของ พนักงานจะเก็บเงินให้ตอนส่ง
               </span>
             </p>
           )}
@@ -2509,7 +2556,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
                 className="w-48 h-48 mx-auto rounded-lg object-contain"
                 style={{ border: `1px solid ${COLORS.line}` }}
               />
-              <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold mt-3">ยอดที่ต้องโอน ฿{total}</p>
+              <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold mt-3">ยอดที่ต้องโอน ฿{fmtBaht(total)}</p>
 
               {/* เครื่องที่เปิดแอปสั่งของ กับเครื่องที่ใช้สแกนจ่าย มักเป็นเครื่องเดียวกัน (มือถือเครื่องเดียวสแกน QR บนจอตัวเองไม่ได้)
                   จึงให้ลูกค้าเซฟรูป QR นี้ไว้ก่อน แล้วค่อยเปิดแอปธนาคารไปเลือกรูปจากคลังภาพเพื่อสแกนจ่ายแทน */}
@@ -2535,7 +2582,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           <div style={{ background: "#FFFFFF", border: `1.5px dashed ${COLORS.line}` }} className="rounded-xl p-4">
             <p style={{ color: COLORS.ink }} className="text-sm font-semibold mb-1">แนบสลิปการโอนเงิน</p>
             <p style={{ color: COLORS.inkSoft }} className="text-xs mb-3">
-              โอนผ่านแอปธนาคาร/พร้อมเพย์ ฿{total} แล้วอัปโหลดรูปสลิปที่นี่ พนักงานจะตรวจสอบสลิปให้อีกครั้งก่อนเริ่มทำออร์เดอร์
+              โอนผ่านแอปธนาคาร/พร้อมเพย์ ฿{fmtBaht(total)} แล้วอัปโหลดรูปสลิปที่นี่ พนักงานจะตรวจสอบสลิปให้อีกครั้งก่อนเริ่มทำออร์เดอร์
             </p>
 
             {!slipImg && !compressing && (
@@ -2614,7 +2661,7 @@ function drawOrderReceipt(order, shopName) {
   const items = (order && order.items) || [];
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const discount = (order && order.discount && Number(order.discount.baht)) || 0;
-  const total = Math.max(0, subtotal - discount);
+  const total = Math.round(Math.max(0, subtotal - discount) * 100) / 100;
   const W = 640;
   const M = 28;
 
@@ -2937,7 +2984,7 @@ function OrderSuccessView({ orderNo, customer, onNewOrder, paymentMethod, order,
 }
 
 // ================= MENU MANAGER (staff) =================
-function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories }) {
+function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, onSaveShopInfo, stockItems, categories, updateCategories, promos }) {
   const [editing, setEditing] = useState(null); // item being edited, or "new"
   const [form, setForm] = useState({ name: "", desc: "", price: "", category: "drink", img: "", addOns: [], cost: "", recipe: {} });
   const [newOptionName, setNewOptionName] = useState({}); // groupId -> ชื่อตัวเลือกที่กำลังพิมพ์
@@ -2962,6 +3009,8 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
   const [editingCat, setEditingCat] = useState(null); // หมวดที่กำลังแก้ไข (เปิดฟอร์มย่อย)
   const [catEditName, setCatEditName] = useState(""); // ชื่อหมวดในฟอร์มแก้ไข
   const [confirmDelMenu, setConfirmDelMenu] = useState(false); // ยืนยันลบเมนูจากฟอร์ม (กด 2 ครั้ง)
+  const [confirmDelOption, setConfirmDelOption] = useState(null); // id ตัวเลือกเพิ่มที่รอกดยืนยันซ้ำ (เฉพาะตัวที่มีโปรผูกอยู่)
+  const [confirmDelGroup, setConfirmDelGroup] = useState(null); // id กลุ่มตัวเลือกเพิ่มที่รอกดยืนยันซ้ำ (เฉพาะกลุ่มที่มีตัวเลือกผูกโปรอยู่)
   // ---- ลากวาง (HTML5 drag & drop): สลับตำแหน่งเมนู / ย้ายข้ามหมวด / เรียงลำดับหมวด ----
   const [dragItem, setDragItem] = useState(null); // { id, cat } รายการเมนูที่กำลังลาก
   const [overItem, setOverItem] = useState(null); // { id, cat } จุดที่กำลังจะปล่อย (ไฮไลต์)
@@ -3428,6 +3477,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
 
   const removeGroup = (gid) => {
     setForm((f) => ({ ...f, addOns: f.addOns.filter((g) => g.id !== gid) }));
+    setConfirmDelGroup(null);
   };
 
   const addOption = (gid) => {
@@ -3465,6 +3515,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
       ...f,
       addOns: f.addOns.map((g) => (g.id === gid ? { ...g, options: (g.options || []).filter((o) => o.id !== oid) } : g)),
     }));
+    setConfirmDelOption(null);
   };
 
   const save = () => {
@@ -3886,7 +3937,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                     </p>
                     <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">{item.desc}</p>
                     <p style={{ color: COLORS.caramelDark }} className="text-xs font-bold mt-0.5">
-                      ฿{item.price}
+                      ฿{fmtBaht(item.price)}
                       {item.addOns && item.addOns.length > 0 && (
                         <span style={{ color: COLORS.inkSoft }} className="font-normal">
                           {" "}· ตัวเลือกเพิ่ม {normalizeAddOnGroups(item.addOns).length} กลุ่ม
@@ -4193,8 +4244,26 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                         >
                           {g.single ? "เลือกได้ 1 ข้อ" : "เลือกได้หลายข้อ"}
                         </button>
-                        <button onClick={() => removeGroup(g.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
-                          <Trash2 size={14} />
+                        <button
+                          onClick={() => {
+                            const refPromos = [...new Set((g.options || []).flatMap((o) => promosReferencingAddOn(o.id, promos)))];
+                            if (refPromos.length && confirmDelGroup !== g.id) {
+                              setConfirmDelGroup(g.id);
+                              setTimeout(() => setConfirmDelGroup((cur) => (cur === g.id ? null : cur)), 3500);
+                              return;
+                            }
+                            removeGroup(g.id);
+                          }}
+                          title={(() => {
+                            const refPromos = [...new Set((g.options || []).flatMap((o) => promosReferencingAddOn(o.id, promos)))];
+                            return refPromos.length
+                              ? `⚠ มีตัวเลือกในกลุ่มนี้ที่ใช้ในโปรโมชั่นที่เปิดอยู่: ${refPromos.map((p) => p.name).join(", ")} — กดอีกครั้งเพื่อยืนยันลบทั้งกลุ่ม`
+                              : undefined;
+                          })()}
+                          style={{ color: "#C0533F" }}
+                          className="flex-shrink-0"
+                        >
+                          {confirmDelGroup === g.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
                         </button>
                       </div>
                       {/* ตัวเลือกย่อยในกลุ่ม — แต่ละตัวแก้ชื่อ/ราคา/ต้นทุน + ผูกวัตถุดิบได้ */}
@@ -4221,8 +4290,25 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                                   style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}
                                   className="w-14 rounded-lg px-2 py-1.5 text-sm bg-white outline-none text-center"
                                 />
-                                <button onClick={() => removeOption(g.id, o.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
-                                  <Trash2 size={14} />
+                                <button
+                                  onClick={() => {
+                                    const refPromos = promosReferencingAddOn(o.id, promos);
+                                    if (refPromos.length && confirmDelOption !== o.id) {
+                                      setConfirmDelOption(o.id);
+                                      setTimeout(() => setConfirmDelOption((cur) => (cur === o.id ? null : cur)), 3500);
+                                      return;
+                                    }
+                                    removeOption(g.id, o.id);
+                                  }}
+                                  title={
+                                    promosReferencingAddOn(o.id, promos).length
+                                      ? `⚠ ใช้ในโปรโมชั่นที่เปิดอยู่: ${promosReferencingAddOn(o.id, promos).map((p) => p.name).join(", ")} — กดอีกครั้งเพื่อยืนยันลบ`
+                                      : undefined
+                                  }
+                                  style={{ color: "#C0533F" }}
+                                  className="flex-shrink-0"
+                                >
+                                  {confirmDelOption === o.id ? <span className="text-[9px] font-bold px-1">ยืนยัน?</span> : <Trash2 size={14} />}
                                 </button>
                               </div>
                               {/* ต้นทุน + วัตถุดิบของท็อปปิ้งนี้ (ตัดสต็อกอัตโนมัติ) */}
@@ -4374,6 +4460,16 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                 </span>
               </button>
             </div>
+
+            {editing !== "new" && (() => {
+              const refPromos = promosReferencingMenuItem(editing, promos);
+              if (!refPromos.length) return null;
+              return (
+                <p style={{ color: "#C0533F" }} className="text-[11px] font-medium mt-2">
+                  ⚠ เมนูนี้ถูกใช้ในโปรโมชั่นที่เปิดอยู่: {refPromos.map((p) => p.name).join(", ")} — ลบแล้วโปรนั้นจะหยุดหักส่วนลดให้เมนูนี้ทันที (โปรไม่ได้ถูกลบ แค่ใช้กับเมนูนี้ไม่ได้อีก)
+                </p>
+              );
+            })()}
 
             <div className="flex gap-2 mt-4">
               {editing !== "new" && (
@@ -4671,7 +4767,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   <div key={i.cartId || i.id} className="text-sm">
                     <div className="flex justify-between items-baseline gap-2">
                       <span style={{ color: COLORS.ink }}>{i.name} × {i.qty}</span>
-                      <span style={{ color: COLORS.inkSoft }} className="text-xs flex-shrink-0">฿{((i.price || 0) * i.qty).toLocaleString()}</span>
+                      <span style={{ color: COLORS.inkSoft }} className="text-xs flex-shrink-0">฿{fmtBaht((i.price || 0) * i.qty)}</span>
                     </div>
                     {i.addOns && i.addOns.length > 0 && (
                       <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
@@ -4742,11 +4838,11 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                   {order.discount && Number(order.discount.baht) > 0 && (
                     <div className="text-xs mb-0.5">
                       <span style={{ color: COLORS.sage }} className="font-semibold">
-                        ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{order.discount.baht}
+                        ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{fmtBaht(order.discount.baht)}
                       </span>
                     </div>
                   )}
-                  <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
+                  <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{fmtBaht(total)}</span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {(order.status === "new" || order.status === "preparing" || order.status === "done") && (
@@ -4910,7 +5006,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                           : order.deliveryNow
                           ? "จัดส่งตอนนี้"
                           : "จัดส่ง"}{" "}
-                        · ฿{total}
+                        · ฿{fmtBaht(total)}
                       </p>
                     </div>
                   </button>
@@ -5112,7 +5208,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                           #{b.orderNo} · {b.customerName || "ไม่ระบุชื่อ"}
                         </p>
                         <p style={{ color: COLORS.inkSoft }} className="text-xs truncate">
-                          {b.items.map((i) => `${i.name} × ${i.qty}`).join(", ")} · ฿{calcOrderTotal(b)}
+                          {b.items.map((i) => `${i.name} × ${i.qty}`).join(", ")} · ฿{fmtBaht(calcOrderTotal(b))}
                         </p>
                       </div>
                       {matched && (
@@ -5279,7 +5375,7 @@ function StaffOrdersView({ orders, recentOrderIds, onAdvance, onCancel, onRevive
                           : order.deliveryNow
                           ? "จัดส่งตอนนี้"
                           : "จัดส่ง"}{" "}
-                        · ฿{total}
+                        · ฿{fmtBaht(total)}
                         {order.cancelReason ? ` · ${order.cancelReason}` : ""}
                       </p>
                     </div>
@@ -5473,7 +5569,7 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             <div key={i.cartId || i.id} className="text-sm">
               <div className="flex justify-between items-baseline gap-2">
                 <span style={{ color: COLORS.ink }}>{i.name} × {i.qty}</span>
-                <span style={{ color: COLORS.inkSoft }} className="text-xs flex-shrink-0">฿{((i.price || 0) * i.qty).toLocaleString()}</span>
+                <span style={{ color: COLORS.inkSoft }} className="text-xs flex-shrink-0">฿{fmtBaht((i.price || 0) * i.qty)}</span>
               </div>
               {i.addOns && i.addOns.length > 0 && (
                 <p style={{ color: COLORS.caramelDark }} className="text-[11px] mt-0.5">
@@ -5495,11 +5591,11 @@ function StaffDeliveryView({ orders, onAdvance, onMarkPaid, onUnmarkPaid }) {
             {order.discount && Number(order.discount.baht) > 0 && (
               <div className="text-xs mb-0.5">
                 <span style={{ color: COLORS.sage }} className="font-semibold">
-                  ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{order.discount.baht}
+                  ส่วนลด {order.discount.label || ("โค้ด " + (order.discount.code || ""))} -฿{fmtBaht(order.discount.baht)}
                 </span>
               </div>
             )}
-            <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{total}</span>
+            <span style={{ color: COLORS.caramelDark }} className="font-bold text-sm">฿{fmtBaht(total)}</span>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {order.phone && (
@@ -5737,6 +5833,9 @@ const rulesToBuilderForm = (r, menu) => {
   f.timeTo = (r && r.timeTo) || "";
   f.days = [...((r && r.days) || [])];
   f.target = (r && r.target) || "all";
+  // action=combo ใช้เป้าหมาย "ทุกเมนู" เสมอ (ชุดกำหนดจากเมนูที่เลือกในฟิลด์ comboIds) — เผื่อโหลดโปรเก่า
+  // ที่เคยบันทึกผิดเป็น target อื่น (ก่อนจะซ่อนตัวเลือกเป้าหมายออกจากฟอร์มตอนเลือก action=combo)
+  if (r && r.action === "combo") f.target = "all";
   f.targetMenuIds = [...((r && r.targetIds) || [])];
   if (r && r.target === "addons") {
     f.addonNames = [...new Set(opts.filter((o) => (r.addonIds || []).includes(o.id)).map((o) => o.name))];
@@ -5819,6 +5918,28 @@ const ruleDescribe = (r, menu) => {
   const limit = Number(r.limitMax) > 0 ? ` (สูงสุด ${r.limitMax} ชิ้น/ออร์เดอร์)` : "";
   return (parts.length ? parts.join(" + ") + " → " : "") + act + " จาก" + tgt + limit;
 };
+
+// โปรที่ active อยู่ ที่อ้างอิงเมนู id นี้อยู่ (เป้าหมาย/ชุด/เงื่อนไข "ต้องมีเมนูนี้ในตะกร้า") — ทั้งโปรเก่าและโปรตัวต่อ
+// ใช้เตือนพนักงานก่อนลบเมนู กันโปรที่ตั้งไว้เงียบๆ หยุดทำงานโดยไม่รู้ตัว
+const promosReferencingMenuItem = (itemId, promos) =>
+  (promos || []).filter((p) => {
+    if (!p || !p.active) return false;
+    if (p.rules) {
+      const r = p.rules;
+      if (r.target === "items" && (r.targetIds || []).includes(itemId)) return true;
+      if (r.action === "combo" && (r.comboIds || []).includes(itemId)) return true;
+      if ((r.conds || []).includes("contains") && (r.containsIds || []).includes(itemId)) return true;
+      return false;
+    }
+    return !!(p.itemIds && p.itemIds.includes(itemId));
+  });
+// โปรที่ active อยู่ ที่อ้างอิงตัวเลือกเพิ่ม (ท็อปปิ้ง) id นี้อยู่ — ทั้งโปรเก่าและโปรตัวต่อ
+const promosReferencingAddOn = (optionId, promos) =>
+  (promos || []).filter((p) => {
+    if (!p || !p.active) return false;
+    if (p.rules) return p.rules.target === "addons" && (p.rules.addonIds || []).includes(optionId);
+    return !!(p.addOnIds && p.addOnIds.includes(optionId));
+  });
 
 // ปุ่มเลือกแบบเม็ด (ใช้ในฟอร์มตัวต่อ — เลือกจากรายการจริง ไม่ใช่พิมพ์เอง กันพิมพ์ผิด)
 const BuilderChip = ({ on, onClick, children, activeBg, activeColor }) => (
@@ -5916,6 +6037,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
     if (f.action === "combo") {
       if (f.comboIds.length < 2) return "เลือกเมนูในชุดอย่างน้อย 2 ตัว";
       if (!(Number(f.comboPrice) > 0)) return "กรอกราคา/ส่วนลดของชุด";
+      if (f.target !== "all") return "ราคารวมชุดใช้เป้าหมาย \"ทุกเมนู\" เท่านั้น — เปลี่ยนเป้าหมายเป็นทุกเมนู (ชุดกำหนดจากเมนูที่เลือกด้านล่างอยู่แล้ว)";
     }
     if (f.action === "free" && f.target === "cart") return "ทำให้ยอดรวมทั้งออร์เดอร์ฟรีไม่ได้ — ฟรีใช้กับเมนู/ท็อปปิ้งเท่านั้น";
     if ((f.action === "bogo" || f.action === "nth") && (f.target === "addons" || f.target === "cart")) return "1แถม1 / ชิ้นที่N ใช้กับเมนูเท่านั้น";
@@ -6225,7 +6347,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                     <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium block mt-3 mb-1">จำกัดจำนวนใช้โค้ด (รวมทุกคน)</label>
                     <input
                       value={form.maxUsesVal}
-                      onChange={(e) => setForm((f) => ({ ...f, maxUsesVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                      onChange={(e) => setForm((f) => ({ ...f, maxUsesVal: digitsOnly(e.target.value) }))}
                       placeholder="ไม่ระบุ = ไม่จำกัด"
                       inputMode="numeric"
                       className="w-32 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
@@ -6261,7 +6383,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                         <span style={{ color: COLORS.inkSoft }} className="text-xs">฿</span>
                         <input
                           value={row.t}
-                          onChange={(e) => setTier("spendTiers", i, "t", e.target.value.replace(/[^0-9]/g, ""))}
+                          onChange={(e) => setTier("spendTiers", i, "t", digitsOnly(e.target.value))}
                           placeholder="เช่น 200"
                           inputMode="numeric"
                           className="w-24 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6270,7 +6392,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                         <span style={{ color: COLORS.inkSoft }} className="text-xs">→ ลด ฿</span>
                         <input
                           value={row.d}
-                          onChange={(e) => setTier("spendTiers", i, "d", e.target.value.replace(/[^0-9]/g, ""))}
+                          onChange={(e) => setTier("spendTiers", i, "d", digitsOnly(e.target.value))}
                           placeholder="เช่น 20"
                           inputMode="numeric"
                           className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6292,7 +6414,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       <div key={i} className="flex items-center gap-1.5 mb-1.5">
                         <input
                           value={row.t}
-                          onChange={(e) => setTier("qtyTiers", i, "t", e.target.value.replace(/[^0-9]/g, ""))}
+                          onChange={(e) => setTier("qtyTiers", i, "t", digitsOnly(e.target.value))}
                           placeholder="เช่น 3"
                           inputMode="numeric"
                           className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6301,7 +6423,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                         <span style={{ color: COLORS.inkSoft }} className="text-xs">ชิ้น → ลด ฿</span>
                         <input
                           value={row.d}
-                          onChange={(e) => setTier("qtyTiers", i, "d", e.target.value.replace(/[^0-9]/g, ""))}
+                          onChange={(e) => setTier("qtyTiers", i, "d", digitsOnly(e.target.value))}
                           placeholder="เช่น 15"
                           inputMode="numeric"
                           className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6376,7 +6498,10 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                 )}
               </div>
 
-              {/* ② เป้าหมาย */}
+              {/* ② เป้าหมาย — ซ่อนไว้เมื่อเลือก action=ราคารวมชุด เพราะชุดกำหนดเป้าหมายจากเมนูที่เลือกในขั้นตอนที่ ③ อยู่แล้ว
+                  (เดิมเลือกเป้าหมายอื่นได้พร้อมกัน แต่ค่านั้นไม่เคยถูกใช้จริง ทำให้ดูเหมือนตั้งได้แต่จริงๆ ไม่มีผล
+                   หรือแย่กว่านั้นคือกลายเป็นหักคนละแบบไปเลยถ้าเลือก "ยอดรวมทั้งออร์เดอร์") */}
+              {form.action !== "combo" && (
               <div>
                 <div className="flex items-baseline gap-1.5 mb-1.5">
                   <label style={{ color: COLORS.inkSoft }} className="text-xs font-medium">② เป้าหมาย</label>
@@ -6468,6 +6593,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                   </div>
                 )}
               </div>
+              )}
 
               {/* ③ ส่วนลด */}
               <div>
@@ -6487,7 +6613,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                     <button
                       key={a.key}
                       type="button"
-                      onClick={() => setForm((f) => ({ ...f, action: a.key }))}
+                      onClick={() => setForm((f) => ({ ...f, action: a.key, target: a.key === "combo" ? "all" : f.target }))}
                       style={{
                         background: form.action === a.key ? COLORS.caramel : "#FFFFFF",
                         color: form.action === a.key ? "#FFF9F0" : COLORS.inkSoft,
@@ -6506,7 +6632,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                   <div className="mt-2 flex items-center gap-2">
                     <input
                       value={form.amtVal}
-                      onChange={(e) => setForm((f) => ({ ...f, amtVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                      onChange={(e) => setForm((f) => ({ ...f, amtVal: digitsOnly(e.target.value) }))}
                       placeholder={form.action === "percent" ? "เช่น 10" : form.action === "bogo" ? "เช่น 2" : "เช่น 20"}
                       inputMode="numeric"
                       className="w-28 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
@@ -6539,7 +6665,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                     <span style={{ color: COLORS.inkSoft }} className="text-xs">ชิ้นที่</span>
                     <input
                       value={form.nthN}
-                      onChange={(e) => setForm((f) => ({ ...f, nthN: e.target.value.replace(/[^0-9]/g, "") }))}
+                      onChange={(e) => setForm((f) => ({ ...f, nthN: digitsOnly(e.target.value) }))}
                       placeholder="เช่น 2"
                       inputMode="numeric"
                       className="w-16 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6548,7 +6674,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                     <span style={{ color: COLORS.inkSoft }} className="text-xs">ลด</span>
                     <input
                       value={form.nthAmt}
-                      onChange={(e) => setForm((f) => ({ ...f, nthAmt: e.target.value.replace(/[^0-9]/g, "") }))}
+                      onChange={(e) => setForm((f) => ({ ...f, nthAmt: digitsOnly(e.target.value) }))}
                       placeholder="เช่น 50"
                       inputMode="numeric"
                       className="w-20 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -6593,7 +6719,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       />
                       <input
                         value={form.comboPrice}
-                        onChange={(e) => setForm((f) => ({ ...f, comboPrice: e.target.value.replace(/[^0-9]/g, "") }))}
+                        onChange={(e) => setForm((f) => ({ ...f, comboPrice: digitsOnly(e.target.value) }))}
                         placeholder={form.comboMode === "price" ? "เช่น 50" : form.comboMode === "percent" ? "เช่น 20" : "เช่น 10"}
                         inputMode="numeric"
                         className="w-24 rounded-xl px-3.5 py-2.5 text-sm bg-white outline-none"
@@ -6613,7 +6739,7 @@ function StaffPromoView({ promos, updatePromos, menu }) {
                       <span style={{ color: COLORS.inkSoft }} className="text-xs">จำกัดสูงสุด</span>
                       <input
                         value={form.limitVal}
-                        onChange={(e) => setForm((f) => ({ ...f, limitVal: e.target.value.replace(/[^0-9]/g, "") }))}
+                        onChange={(e) => setForm((f) => ({ ...f, limitVal: digitsOnly(e.target.value) }))}
                         placeholder="1"
                         inputMode="numeric"
                         className="w-16 rounded-xl px-3 py-2 text-sm bg-white outline-none"
@@ -7209,17 +7335,24 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
   // ยอดขายเงินสดในรอบนี้ — นับเฉพาะออร์เดอร์เงินสดที่เก็บเงินได้แล้ว (คนส่งกด "เก็บเงินแล้ว" แล้ว) ตั้งแต่เปิดรอบ
   const cashSalesInRound = useMemo(() => {
     if (!activeRound) return 0;
-    return orders
-      .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && orderIsPaid(o))
-      .reduce((s, o) => s + calcOrderTotal(o), 0);
+    // ปัดยอดรวมอีกรอบหลังบวก — บวกเลขทศนิยมหลายออร์เดอร์ต่อกันอาจสะสมเศษ float ได้ (เช่นเดียวกับ discountBaht)
+    return Math.round(
+      orders
+        .filter((o) => o.paymentMethod === "cash" && o.status !== "cancelled" && o.createdAt >= activeRound.openedAt && orderIsPaid(o))
+        .reduce((s, o) => s + calcOrderTotal(o), 0) * 100
+    ) / 100;
   }, [orders, activeRound]);
 
   const roundDeposits = (entries) =>
     (entries || []).filter((e) => e.type === "deposit").reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const roundWithdrawals = (entries) =>
     (entries || []).filter((e) => e.type === "withdraw").reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  // ยอดเงินสดที่ควรมีในลิ้นชักตอนปิดรอบ — พนักงานเอาไปเทียบกับเงินที่นับได้จริง ต้องปัดกันเศษ float
+  // สะสมจากการบวก/ลบหลายรายการ (เงินฝาก/เบิกออกตั้งเป็นทศนิยมได้)
   const roundExpected = (entries) =>
-    (Number(activeRound && activeRound.openingCash) || 0) + cashSalesInRound + roundDeposits(entries) - roundWithdrawals(entries);
+    Math.round(
+      ((Number(activeRound && activeRound.openingCash) || 0) + cashSalesInRound + roundDeposits(entries) - roundWithdrawals(entries)) * 100
+    ) / 100;
 
   const openRound = () => {
     const cash = Number(roundOpenForm.cash);
@@ -7267,7 +7400,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       cashSales: cashSalesInRound,
       expected,
       actual,
-      diff: actual - expected,
+      diff: Math.round((actual - expected) * 100) / 100,
       note: roundCloseForm.note.trim(),
       entries: activeRound.entries || [],
     };
@@ -7305,16 +7438,18 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
     return cost;
   };
 
-  const totalRevenue = sold.reduce((s, o) => s + calcOrderTotal(o), 0);
-  const totalCost = sold.reduce((s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0), 0);
-  const grossProfit = totalRevenue - totalCost;
+  // ปัดยอดรวมอีกรอบหลังบวกหลายออร์เดอร์ — กันเศษ float สะสม (ยอดต่อออร์เดอร์แต่ละอันสะอาดอยู่แล้วจาก calcOrderTotal)
+  const totalRevenue = Math.round(sold.reduce((s, o) => s + calcOrderTotal(o), 0) * 100) / 100;
+  // ต้นทุน/หน่วยตั้งเป็นทศนิยมได้ (ไม่บังคับเป็นจำนวนเต็มเหมือนราคาขาย) บวกสะสมหลายรายการ/ออร์เดอร์เลยต้องปัดด้วย
+  const totalCost = Math.round(sold.reduce((s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0), 0) * 100) / 100;
+  const grossProfit = Math.round((totalRevenue - totalCost) * 100) / 100;
 
   // รายจ่ายในช่วง (เรียงใหม่สุดก่อน)
   const filteredExpenses = useMemo(() => {
     const list = (expenses || []).filter((e) => rangeStart === null || (e.createdAt || 0) >= rangeStart);
     return [...list].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, [expenses, rangeStart]);
-  const totalExpense = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const totalExpense = Math.round(filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0) * 100) / 100;
   // ออร์เดอร์ที่ทำเสร็จแล้ว (ถึงสถานะ "เสร็จแล้ว") แล้วถูกยกเลิก — ต้นทุนวัตถุดิบที่เสียไปจริง ("เข้าเนื้อ")
   // เอามาโชว์แยกบรรทัดเป็นขาดทุน ลดกำไรสุทธิ (ออร์เดอร์ที่ยกเลิกก่อนทำ ไม่นับ)
   const cancelledMade = useMemo(() => {
@@ -7323,11 +7458,10 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       (o) => o.status === "cancelled" && o.cancelledFrom === "done" && !o.goodsUsedByOrderId
     );
   }, [orders, rangeStart]);
-  const lostCost = cancelledMade.reduce(
-    (s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0),
-    0
-  );
-  const netProfit = grossProfit - totalExpense - lostCost;
+  const lostCost = Math.round(
+    cancelledMade.reduce((s, o) => s + (o.items || []).reduce((s2, it) => s2 + costOfItem(it), 0), 0) * 100
+  ) / 100;
+  const netProfit = Math.round((grossProfit - totalExpense - lostCost) * 100) / 100;
 
   // สรุปแยกตามวิธีชำระเงิน (นับเฉพาะที่เก็บเงินได้แล้ว)
   const payStats = useMemo(() => {
@@ -7340,6 +7474,9 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       map[key].count += 1;
       map[key].amount += calcOrderTotal(o);
     });
+    // ปัดยอดรวมแต่ละช่องทางอีกรอบหลังบวกสะสมหลายออร์เดอร์ — กันเศษ float
+    map.cash.amount = Math.round(map.cash.amount * 100) / 100;
+    map.promptpay.amount = Math.round(map.promptpay.amount * 100) / 100;
     return map;
   }, [sold]);
 
@@ -7360,7 +7497,9 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         (it.addOns || []).forEach((a) => e.addOnCounts.set(a.name, (e.addOnCounts.get(a.name) || 0) + it.qty));
       })
     );
-    return [...map.values()].sort((a, b) => b.revenue - a.revenue);
+    return [...map.values()]
+      .map((e) => ({ ...e, cost: Math.round(e.cost * 100) / 100 })) // ปัดต้นทุนสะสมต่อเมนู กันเศษ float จากต้นทุน/หน่วยที่เป็นทศนิยมได้
+      .sort((a, b) => b.revenue - a.revenue);
   }, [sold]);
 
   // ---- ข้อมูลจากหน้า "ยอดขาย" เดิมที่รวบมาไว้ในแท็บบัญชีเดียว ----
@@ -7623,15 +7762,15 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span style={{ color: COLORS.inkSoft }}>เงินสดในลิ้นชักตอนเปิด</span>
-                <span style={{ color: COLORS.ink }} className="font-semibold">฿{Number(activeRound.openingCash) || 0}</span>
+                <span style={{ color: COLORS.ink }} className="font-semibold">฿{fmtBaht(activeRound.openingCash)}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span style={{ color: COLORS.inkSoft }}>ยอดขายเงินสดในรอบ (เก็บแล้ว)</span>
-                <span style={{ color: COLORS.sage }} className="font-semibold">+฿{cashSalesInRound}</span>
+                <span style={{ color: COLORS.sage }} className="font-semibold">+฿{fmtBaht(cashSalesInRound)}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span style={{ color: COLORS.inkSoft }}>เงินที่ควรมีตอนนี้</span>
-                <span style={{ color: COLORS.ink }} className="font-bold">฿{roundExpected(activeRound.entries)}</span>
+                <span style={{ color: COLORS.ink }} className="font-bold">฿{fmtBaht(roundExpected(activeRound.entries))}</span>
               </div>
               {activeRound.note && (
                 <p style={{ color: COLORS.inkSoft }} className="text-[11px]">หมายเหตุ: {activeRound.note}</p>
@@ -7642,7 +7781,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
             {(activeRound.entries || []).map((e) => (
               <div key={e.id} className="flex items-center gap-2 text-xs">
                 <Chip tone={e.type === "withdraw" ? "caramel" : "sage"}>{e.type === "withdraw" ? "เบิก" : "ฝาก"}</Chip>
-                <span style={{ color: COLORS.ink }} className="font-bold flex-shrink-0">฿{Number(e.amount) || 0}</span>
+                <span style={{ color: COLORS.ink }} className="font-bold flex-shrink-0">฿{fmtBaht(e.amount)}</span>
                 {e.note && <span style={{ color: COLORS.inkSoft }} className="truncate flex-1">{e.note}</span>}
                 <span style={{ color: COLORS.inkSoft }} className="flex-shrink-0">
                   {new Date(e.createdAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}
@@ -7741,8 +7880,8 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                 </div>
                 <p style={{ color: COLORS.inkSoft }} className="text-[11px] leading-relaxed">
                   เปิด {new Date(r.openedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} ·{" "}
-                  ปิด {new Date(r.closedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} · เงินสดเปิด ฿{r.openingCash} ·{" "}
-                  ขายเงินสด ฿{r.cashSales} · ควรมี ฿{r.expected} · จริง ฿{r.actual}
+                  ปิด {new Date(r.closedAt).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} · เงินสดเปิด ฿{fmtBaht(r.openingCash)} ·{" "}
+                  ขายเงินสด ฿{fmtBaht(r.cashSales)} · ควรมี ฿{fmtBaht(r.expected)} · จริง ฿{fmtBaht(r.actual)}
                 </p>
                 {r.note && <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">หมายเหตุ: {r.note}</p>}
               </div>
@@ -7755,21 +7894,21 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       <div className="grid grid-cols-2 gap-2 mb-4">
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ยอดขาย (เก็บเงินได้แล้ว)</p>
-          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{totalRevenue.toLocaleString()}</p>
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">฿{fmtBaht(totalRevenue)}</p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">ต้นทุนวัตถุดิบ (ขายแล้ว)</p>
-          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">-฿{totalCost.toLocaleString()}</p>
+          <p style={{ color: COLORS.caramelDark }} className="text-lg font-bold">-฿{fmtBaht(totalCost)}</p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">กำไรขั้นต้น</p>
           <p style={{ color: grossProfit >= 0 ? COLORS.sage : "#C0533F" }} className="text-lg font-bold">
-            ฿{grossProfit.toLocaleString()}
+            ฿{fmtBaht(grossProfit)}
           </p>
         </div>
         <div style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
           <p style={{ color: COLORS.inkSoft }} className="text-[11px] mb-1">รายจ่ายในช่วงนี้</p>
-          <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{totalExpense.toLocaleString()}</p>
+          <p style={{ color: "#C0533F" }} className="text-lg font-bold">-฿{fmtBaht(totalExpense)}</p>
         </div>
       </div>
       {cancelledMade.length > 0 && (
@@ -7780,7 +7919,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
           <span className="text-sm font-semibold flex items-center gap-1.5 min-w-0">
             <AlertTriangle size={15} className="flex-shrink-0" /> ต้นทุนออร์เดอร์ที่ทำแล้วยกเลิก ({cancelledMade.length} ออร์เดอร์)
           </span>
-          <span className="text-base font-bold flex-shrink-0">-฿{lostCost.toLocaleString()}</span>
+          <span className="text-base font-bold flex-shrink-0">-฿{fmtBaht(lostCost)}</span>
         </div>
       )}
       <div
@@ -7790,7 +7929,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
         <span className="text-sm font-semibold flex items-center gap-1.5">
           <TrendingUp size={16} /> กำไรสุทธิ (ยอดขาย − ต้นทุน − รายจ่าย)
         </span>
-        <span className="text-lg font-bold">฿{netProfit.toLocaleString()}</span>
+        <span className="text-lg font-bold">฿{fmtBaht(netProfit)}</span>
       </div>
 
       {/* จำนวนออร์เดอร์ / ชิ้นที่ขาย / ออร์เดอร์ที่ยกเลิก (จากหน้า "ยอดขาย" เดิมที่รวบมา) */}
@@ -7814,7 +7953,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
       <div className="grid grid-cols-3 gap-2 mb-5">
         {Object.values(payStats).map((p) => (
           <div key={p.label} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3 text-center">
-            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{p.amount.toLocaleString()}</p>
+            <p style={{ color: COLORS.caramelDark }} className="text-sm font-bold">฿{fmtBaht(p.amount)}</p>
             <p style={{ color: COLORS.inkSoft }} className="text-[11px]">{p.label} · {p.count} ออเดอร์</p>
           </div>
         ))}
@@ -7837,15 +7976,15 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
               <div key={m.name} style={{ background: "#FFFFFF", border: `1px solid ${COLORS.line}` }} className="rounded-2xl p-3.5">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <span style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">{m.name}</span>
-                  <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold flex-shrink-0">฿{m.revenue.toLocaleString()}</span>
+                  <span style={{ color: COLORS.caramelDark }} className="text-sm font-bold flex-shrink-0">฿{fmtBaht(m.revenue)}</span>
                 </div>
                 <div className="flex items-center gap-2 text-[11px]" style={{ color: COLORS.inkSoft }}>
                   <span>{m.qty} ชิ้น</span>
                   {m.hasCost ? (
                     <>
-                      <span>· ต้นทุน ฿{m.cost.toLocaleString()}</span>
+                      <span>· ต้นทุน ฿{fmtBaht(m.cost)}</span>
                       <span style={{ color: profit >= 0 ? COLORS.sage : "#C0533F" }} className="font-bold">
-                        · กำไร ฿{profit.toLocaleString()}
+                        · กำไร ฿{fmtBaht(profit)}
                       </span>
                     </>
                   ) : (
@@ -7943,7 +8082,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                   {e.note ? ` · ${e.note}` : ""} · {new Date(e.createdAt).toLocaleDateString("th-TH")}
                 </p>
               </div>
-              <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">-฿{Number(e.amount).toLocaleString()}</span>
+              <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">-฿{fmtBaht(e.amount)}</span>
               <button onClick={() => setConfirmDeleteExpense(e.id)} style={{ color: "#C0533F" }} className="flex-shrink-0">
                 <Trash2 size={15} />
               </button>
@@ -7969,7 +8108,7 @@ function StaffAccountingView({ orders, menu, expenses, updateExpenses, salesRoun
                   <span style={{ color: COLORS.ink }} className="text-sm font-semibold truncate">
                     #{o.orderNo} · {o.customerName || "ไม่ระบุชื่อ"}
                   </span>
-                  <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">฿{calcOrderTotal(o)}</span>
+                  <span style={{ color: "#C0533F" }} className="text-sm font-bold flex-shrink-0">฿{fmtBaht(calcOrderTotal(o))}</span>
                 </div>
                 <p style={{ color: COLORS.inkSoft }} className="text-xs mb-1.5">
                   {new Date(o.createdAt).toLocaleString("th-TH")} · {o.method === "pickup" ? "รับที่ร้าน" : "จัดส่ง"}
@@ -8806,7 +8945,7 @@ function App() {
     const countPromoUse = () => {
       if (!discount || !discount.promoId) return;
       if (!FIREBASE_SYNC_ENABLED) {
-        // โหมดออฟไลน์ — อัปเดตเฉพาะ state ในเครื่อง (ไม่มี Firestore)
+        // โหมดออฟไลน์ — อัปเดตเฉพาะ state ในเครื่อง (ไม่มี Firestore ไม่มีลูกค้าเครื่องอื่นมาแย่งพร้อมกันอยู่แล้ว)
         setPromos((prev) =>
           prev.map((p) =>
             p.id === discount.promoId
@@ -8820,14 +8959,32 @@ function App() {
         );
         return;
       }
-      const upd = { [`usage.${discount.promoId}.uses`]: firebase.firestore.FieldValue.increment(1) };
-      if (discount.perCustomer) {
-        upd[`usage.${discount.promoId}.usedBy`] = firebase.firestore.FieldValue.arrayUnion(uid);
-      }
-      db.collection("config")
-        .doc("promotions")
-        .update(upd)
-        .catch((err) => console.error("นับการใช้โค้ดไม่สำเร็จ:", err));
+      // ใช้ transaction แทน update ตรงๆ — กันสองเครื่องกดสั่งพร้อมกันแย่งโควตาสุดท้ายของโค้ดที่ตั้ง "จำกัดจำนวนใช้"
+      // (update ธรรมดา + increment แม้เป็น atomic แต่ไม่เช็คโควตาตอนเขียนจริง สองเครื่องอาจผ่านทั้งคู่ทั้งที่โควตาเหลือ 1)
+      // transaction จะอ่านค่าล่าสุดจากเซิร์ฟเวอร์ก่อนเขียนเสมอ ถ้าชนกันจะลองใหม่อัตโนมัติ หรือถ้าโควตาเต็มแล้วจะไม่เขียน
+      const docRef = db.collection("config").doc("promotions");
+      db.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        const data = snap.exists ? snap.data() : {};
+        const usage = (data.usage && data.usage[discount.promoId]) || {};
+        const usesCount = Number(usage.uses) || 0;
+        const usedByList = usage.usedBy || [];
+        if (Number(discount.maxUses) > 0 && usesCount >= Number(discount.maxUses)) {
+          throw new Error("โควตาการใช้โค้ดเต็มแล้วก่อนที่ออร์เดอร์นี้จะบันทึกสำเร็จ");
+        }
+        if (discount.perCustomer && usedByList.includes(uid)) {
+          throw new Error("ลูกค้าคนนี้เคยใช้โค้ด 1 ครั้ง/คนนี้ไปแล้ว");
+        }
+        const upd = { [`usage.${discount.promoId}.uses`]: firebase.firestore.FieldValue.increment(1) };
+        if (discount.perCustomer) {
+          upd[`usage.${discount.promoId}.usedBy`] = firebase.firestore.FieldValue.arrayUnion(uid);
+        }
+        tx.update(docRef, upd);
+      }).catch((err) => {
+        // ออร์เดอร์ยังบันทึกสำเร็จอยู่ (ลูกค้าจ่ายเงินไปแล้ว) แค่การนับโควตาโค้ดพลาด — พนักงานตรวจสอบย้อนหลังได้จาก log
+        // ไม่ throw ต่อ เพราะไม่อยากบล็อกออร์เดอร์ที่ลูกค้าจ่ายเงินสำเร็จแล้วจากการนับโควตาที่พลาดทีหลัง
+        console.error("นับการใช้โค้ดไม่สำเร็จ:", err);
+      });
     };
     const newOrder = {
       orderNo,
@@ -9412,6 +9569,7 @@ function App() {
             stockItems={stockItems}
             categories={categories}
             updateCategories={updateCategories}
+            promos={promos}
           />
         )}
         {role === "staff-promos" && <StaffPromoView promos={promos} updatePromos={updatePromos} menu={menu} />}
