@@ -2693,7 +2693,7 @@ function CheckoutView({ cart, onBack, onPaid, orders, promos, uid, shopQr, deliv
           ? "ยืนยันสั่งอาหาร"
           : collectOnDelivery
           ? "ยืนยันสั่งอาหาร (จ่ายตอนรับของ)"
-          : `ยืนยันการโอน ฿${total}`}
+          : `ยืนยันการโอน ฿${fmtBaht(total)}`}
       </PrimaryButton>
     </div>
   );
@@ -2746,7 +2746,12 @@ function drawOrderReceipt(order, shopName) {
     const nameLines = Math.min(2, wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).length);
     itemH += (nameLines - 1) * 24;
     itemH += 22 * ((i.addOns && i.addOns.length) || 0);
-    if (i.note && i.note.trim()) itemH += 30;
+    // หมายเหตุลูกค้าพิมพ์ได้ยาวไม่จำกัด (เช่นแพ้อาหาร/รายละเอียดหลายข้อ) ต้องห่อบรรทัดเหมือนชื่อเมนู
+    // ไม่งั้นจะไหลล้นขอบขวาของใบเสร็จ มองไม่เห็นข้อความส่วนที่เกิน — คำนวณจำนวนบรรทัดจริงตรงนี้ (สูงสุด 3 บรรทัด)
+    if (i.note && i.note.trim()) {
+      const noteLines = Math.min(3, wrap(`หมายเหตุ: ${i.note.trim()}`, W - M - 18, 13).length);
+      itemH += 20 + noteLines * 18;
+    }
   });
   // แถวข้อมูลลูกค้า: นับตามข้อมูลจริง (ชื่อ + เบอร์โทร + วิธีรับ + ชำระเงิน [+ เวลาจัดส่ง ถ้ามีวันเวลาหรือส่งตอนนี้])
   const infoRows =
@@ -2807,7 +2812,16 @@ function drawOrderReceipt(order, shopName) {
 
   info.forEach(([k, v]) => {
     text(k, M, y, 14, 600, "#6B5642");
-    text(v, W - M, y, 14, 500, "#3A2A1E", "right");
+    // ค่าฝั่งขวาอาจยาวเกินพื้นที่ที่เหลือได้ (ชื่อลูกค้ายาวๆ, ที่อยู่ยาวๆ) — ตัดด้วย "…" แทนที่จะปล่อยให้ไหล
+    // ล้นออกไปทับกับป้าย/ขอบใบ ซึ่งจะมองไม่เห็นข้อความบางส่วนไปเลยในภาพที่ export ออกมา
+    ctx.font = "500 14px 'Itim', sans-serif";
+    const maxValW = W - 2 * M - ctx.measureText(k).width - 16;
+    let vDisplay = v;
+    if (ctx.measureText(vDisplay).width > maxValW) {
+      while (vDisplay.length > 1 && ctx.measureText(vDisplay + "…").width > maxValW) vDisplay = vDisplay.slice(0, -1);
+      vDisplay += "…";
+    }
+    text(vDisplay, W - M, y, 14, 500, "#3A2A1E", "right");
     y += 27;
   });
 
@@ -2827,7 +2841,7 @@ function drawOrderReceipt(order, shopName) {
 
   items.forEach((i) => {
     const itemTotal = i.price * i.qty;
-    text(`฿${itemTotal}`, W - M, y, 16, 600, "#3A2A1E", "right");
+    text(`฿${fmtBaht(itemTotal)}`, W - M, y, 16, 600, "#3A2A1E", "right");
     // ชื่อเมนู + จำนวน — ถ้ายาวให้ขึ้นบรรทัดใหม่ (สูงสุด 2 บรรทัด)
     const lines = wrap(`${i.name} × ${i.qty}`, W - M - 150, 16).slice(0, 2);
     lines.forEach((ln, idx) => {
@@ -2837,13 +2851,18 @@ function drawOrderReceipt(order, shopName) {
     if (i.addOns && i.addOns.length) {
       i.addOns.forEach((a) => {
         text(`+ ${a.name}`, M + 18, y, 14, 400, "#8A4A1F");
-        text(`฿${a.price || 0}`, W - M, y, 14, 400, "#8A4A1F", "right");
+        text(`฿${fmtBaht(a.price || 0)}`, W - M, y, 14, 400, "#8A4A1F", "right");
         y += 22;
       });
     }
     if (i.note && i.note.trim()) {
-      text(`หมายเหตุ: ${i.note.trim()}`, M + 18, y, 13, 400, "#B5652E");
-      y += 30;
+      const allNoteLines = wrap(`หมายเหตุ: ${i.note.trim()}`, W - M - 18, 13);
+      const noteLines = allNoteLines.slice(0, 3);
+      const truncated = allNoteLines.length > 3;
+      noteLines.forEach((ln, idx) => {
+        text(idx === 2 && truncated ? ln + "…" : ln, M + 18, y + idx * 18, 13, 400, "#B5652E");
+      });
+      y += 20 + noteLines.length * 18;
     }
   });
 
@@ -2858,12 +2877,12 @@ function drawOrderReceipt(order, shopName) {
   if (discount > 0) {
     const discountLabel = (order && order.discount && order.discount.label) || "ส่วนลดโค้ด";
     text(discountLabel, M, y, 14, 500, "#6B5642");
-    text(`-฿${discount}`, W - M, y, 14, 600, "#6B5642", "right");
+    text(`-฿${fmtBaht(discount)}`, W - M, y, 14, 600, "#6B5642", "right");
     y += 24;
   }
 
   text("ยอดรวม", M, y, 20, 700, "#3A2A1E");
-  text(`฿${total}`, W - M, y, 22, 700, "#B5652E", "right");
+  text(`฿${fmtBaht(total)}`, W - M, y, 22, 700, "#B5652E", "right");
   y += 44;
 
   // ท้ายใบ
@@ -4220,7 +4239,7 @@ function MenuManagerView({ menu, setMenu, menuLoaded, menuSaveError, shopInfo, o
                     </p>
                     {(item.cost != null || (item.recipe && Object.keys(item.recipe).length > 0)) && (
                       <p style={{ color: COLORS.inkSoft }} className="text-[11px] mt-0.5">
-                        {item.cost != null ? `ต้นทุน ฿${item.cost}/หน่วย` : ""}
+                        {item.cost != null ? `ต้นทุน ฿${fmtBaht(item.cost)}/หน่วย` : ""}
                         {item.cost != null && Object.keys(item.recipe || {}).length > 0 ? " · " : ""}
                         {Object.keys(item.recipe || {}).length > 0 ? `ใช้วัตถุดิบ ${Object.keys(item.recipe).length} รายการ` : ""}
                       </p>
